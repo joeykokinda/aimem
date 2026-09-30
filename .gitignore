@@ -1,0 +1,7 @@
+/bin/
+/dist/
+brain.json
+
+# aimem writes a generated context block into this file naming the local vault's
+# absolute path. That is useful on the machine and meaningless in the repository.
+CLAUDE.md
