@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // FileName is the single per-vault config file, kept at the vault root so it travels
@@ -39,12 +40,23 @@ type Config struct {
 	// in Private: the bridge narrows private access, it does not create it.
 	Journal string `json:"journal"`
 
+	// JournalFilename is a Go time layout naming each daily note, without the extension.
+	// It is what lets `aimem log` find today's note in a vault that does not use the
+	// conventional YYYY-MM-DD.
+	JournalFilename string `json:"journal_filename"`
+
 	Types          []string `json:"types"`
 	Statuses       []string `json:"statuses"`
 	StaleableTypes []string `json:"staleable_types"`
 	StaleDays      int      `json:"stale_days"`
 
 	JournalEntriesPerProject int `json:"journal_entries_per_project"`
+
+	// IndexRepoMap controls whether the generated index carries the full repo-to-note
+	// table. It is the largest fixed block in the file and pure lookup data, which
+	// `aimem project` and the MCP vault_repo tool answer precisely; turning it off trades
+	// a table nobody reads end to end for a smaller file every session pays for.
+	IndexRepoMap bool `json:"index_repo_map"`
 
 	SyncEnabled bool     `json:"sync_enabled"`
 	SyncOwners  []string `json:"sync_owners"`
@@ -63,11 +75,13 @@ func Default(root string) *Config {
 		Locked:                   "Locked",
 		Meta:                     "Meta",
 		Journal:                  "Daily",
+		JournalFilename:          "2006-01-02",
 		Types:                    []string{"project", "company", "research", "idea", "reference", "journal", "dashboard"},
 		Statuses:                 []string{"active", "paused", "shipped", "dead", "evergreen"},
 		StaleableTypes:           []string{"project", "company"},
 		StaleDays:                30,
 		JournalEntriesPerProject: 12,
+		IndexRepoMap:             true,
 		SyncEnabled:              true,
 	}
 }
@@ -193,7 +207,9 @@ func Load(root string) (*Config, error) {
 		Statuses:                 firstNonEmptyList(schema.list("statuses"), defaults.Statuses),
 		StaleableTypes:           firstNonEmptyList(schema.list("staleable_types"), defaults.StaleableTypes),
 		StaleDays:                schema.number("stale_days", defaults.StaleDays),
+		JournalFilename:          firstNonEmpty(folders.text("journal_filename"), defaults.JournalFilename),
 		JournalEntriesPerProject: schema.number("journal_entries_per_project", defaults.JournalEntriesPerProject),
+		IndexRepoMap:             schema.boolean("index_repo_map", defaults.IndexRepoMap),
 		SyncEnabled:              sync.boolean("enabled", defaults.SyncEnabled),
 		SyncOwners:               sync.list("owners"),
 		SyncSkip:                 sync.list("skip"),
@@ -272,6 +288,25 @@ func (c *Config) Validate() error {
 	if c.StaleDays < 1 {
 		return fmt.Errorf("schema.stale_days must be at least 1")
 	}
+	// A layout that does not round-trip would make `aimem log` write to, or create, the
+	// wrong file every day.
+	if c.Journal != "" {
+		if c.JournalFilename == "" {
+			return fmt.Errorf("folders.journal_filename is required when a journal is configured")
+		}
+		// A layout is only useful if it varies with the date. Comparing the layout to
+		// its own output does not work: the reference time formats back to the layout
+		// itself. Two different days must produce two different names.
+		first := time.Date(2024, 3, 7, 9, 0, 0, 0, time.UTC).Format(c.JournalFilename)
+		second := time.Date(2025, 11, 23, 9, 0, 0, 0, time.UTC).Format(c.JournalFilename)
+		if first == second {
+			return fmt.Errorf("folders.journal_filename %q does not vary with the date; it must be a Go time layout such as 2006-01-02",
+				c.JournalFilename)
+		}
+		if strings.ContainsAny(first, `/\`) {
+			return fmt.Errorf("folders.journal_filename %q must not contain a path separator", c.JournalFilename)
+		}
+	}
 	return nil
 }
 
@@ -336,7 +371,9 @@ func (c *Config) Write() error {
 	out.WriteString(fmt.Sprintf("  meta: %s\n", c.Meta))
 	out.WriteString("  # The one private folder the activity bridge may read. Only lines linking\n")
 	out.WriteString("  # to an already-shared note leave it. Set to \"\" to disable the bridge.\n")
-	out.WriteString(fmt.Sprintf("  journal: %s\n\n", c.Journal))
+	out.WriteString(fmt.Sprintf("  journal: %s\n", c.Journal))
+	out.WriteString("  # Go time layout naming each daily note, so `aimem log` can find today's.\n")
+	out.WriteString(fmt.Sprintf("  journal_filename: %s\n\n", c.JournalFilename))
 
 	out.WriteString("schema:\n")
 	writeList(&out, "types", c.Types)
@@ -345,7 +382,11 @@ func (c *Config) Write() error {
 	out.WriteString("  # accrete rather than rot, so warning about them trains you to ignore warnings.\n")
 	writeList(&out, "staleable_types", c.StaleableTypes)
 	out.WriteString(fmt.Sprintf("  stale_days: %d\n", c.StaleDays))
-	out.WriteString(fmt.Sprintf("  journal_entries_per_project: %d\n\n", c.JournalEntriesPerProject))
+	out.WriteString(fmt.Sprintf("  journal_entries_per_project: %d\n", c.JournalEntriesPerProject))
+	out.WriteString("  # The repo table is the biggest block in the generated index and is pure\n")
+	out.WriteString("  # lookup data; `aimem project` answers it precisely. Turn off to shrink the\n")
+	out.WriteString("  # file every agent session reads.\n")
+	out.WriteString(fmt.Sprintf("  index_repo_map: %t\n\n", c.IndexRepoMap))
 
 	out.WriteString("# Writing the generated context block into each mapped repo's CLAUDE.md.\n")
 	out.WriteString("sync:\n")

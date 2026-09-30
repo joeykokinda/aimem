@@ -127,6 +127,38 @@ Extracted lines land in the meta folder and **are readable by any agent with vau
 access.** That is the deliberate trade: a timeline no agent can see is not worth deriving.
 `#private` and `%%...%%` are how a line stays out. Set `journal: ""` to disable the bridge.
 
+### Writing into it
+
+The link requirement is what makes the bridge safe, and it is also why it sits idle: it
+asks you to type `[[Brackets]]` at the moment you are least inclined to. `aimem log`
+closes that from the other side.
+
+```bash
+aimem log deposit sweep works on omenswap now
+# - deposit sweep works on [[Omenswap|omenswap]] now
+#   reaches the timeline via Omenswap
+```
+
+It finds the project names in your sentence, writes the links, preserves the casing you
+typed, and tells you when a line will *not* reach the timeline so the silence is never a
+surprise. `--project <Title>` forces a link when the sentence does not name it.
+
+Writing to the journal is **CLI-only and deliberately not an MCP tool.** An agent that
+could write into the private journal could stage its own text there and have the next
+refresh publish it into shared output, turning a one-way valve into a laundering channel.
+
+`aimem refresh` also reports which shared notes your journal named *without* linking, so
+an empty timeline is distinguishable from an uneventful week:
+
+```
+note: journal lines named these without linking them, so they did not
+      reach the timeline: Omenswap (2), Crypto-Bootcamp (1)
+```
+
+Only note titles are reported, never the surrounding prose, and lines tagged `#private`
+are excluded from the count so the diagnostic cannot reveal what an opted-out line was
+about.
+
 ## Install
 
 Requires Go 1.22+. No third-party dependencies, at build time or runtime.
@@ -169,6 +201,7 @@ folders:
   locked: Locked
   meta: Meta
   journal: Daily          # must be listed in private; "" disables the bridge
+  journal_filename: 2006-01-02   # Go time layout naming each daily note
 
 schema:
   types: [project, company, research, idea, reference, journal, dashboard]
@@ -176,6 +209,7 @@ schema:
   staleable_types: [project, company]
   stale_days: 30
   journal_entries_per_project: 12
+  index_repo_map: true    # the repo table is the largest block in the index
 
 sync:
   enabled: true
@@ -198,6 +232,7 @@ override it.
 | `aimem activity [project]` | Timeline derived from the daily journal |
 | `aimem stale` | Notes claiming active that nobody has touched |
 | `aimem remember <fact>` | Append a durable fact to this repo's note |
+| `aimem log <what you did>` | Add an auto-linked line to today's journal |
 | `aimem refresh` | Validate, rebuild the index, sync repo context |
 | `aimem validate` | Check the vault against its config |
 | `aimem doctor` | Check the install, the config, and the boundary |
@@ -235,6 +270,17 @@ the run; warnings are advisory unless you pass `--strict`.
 
 `aimem install-hooks` adds a vault pre-commit hook that validates and regenerates, so a
 commit cannot leave the index drifting behind the notes. Bypass with `--no-verify`.
+
+Between commits the index can still fall behind, so every read command warns on stderr
+when a note is newer than the index. `aimem refresh --if-stale` does nothing when nothing
+changed, which makes it cheap to run from a timer or a shell hook:
+
+```bash
+# fish, in config.fish
+function aimem_sync --on-event fish_prompt
+    command aimem refresh --if-stale --no-sync >/dev/null 2>&1 &
+end
+```
 
 ## Repo context blocks
 

@@ -16,9 +16,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/joeykokinda/aimem/internal/config"
 	"github.com/joeykokinda/aimem/internal/index"
+	"github.com/joeykokinda/aimem/internal/journal"
 	"github.com/joeykokinda/aimem/internal/mcp"
 	"github.com/joeykokinda/aimem/internal/search"
 	"github.com/joeykokinda/aimem/internal/sync"
@@ -42,6 +44,7 @@ Reading
 
 Writing
   remember <fact>       Append a durable fact to this repo's note
+  log <what you did>    Add a linked line to today's journal
   refresh               Validate, rebuild the index, sync repo context
 
 Setup
@@ -87,6 +90,8 @@ func main() {
 		err = runStale(args)
 	case "remember":
 		err = runRemember(args)
+	case "log":
+		err = runLog(args)
 	case "refresh":
 		err = runRefresh(args)
 	case "validate":
@@ -185,6 +190,18 @@ func permute(set *flag.FlagSet, args []string) []string {
 	return append(append(flags, "--"), positional...)
 }
 
+// warnIfStale tells the caller the index is behind the notes. It goes to stderr on
+// purpose: every read command supports --json, and a warning on stdout would corrupt it.
+func warnIfStale(settings *config.Config) {
+	stale, newest, err := index.Stale(settings)
+	if err != nil || !stale {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"warning: a note changed %s, after the index was built. Run `aimem refresh`.\n",
+		newest.Format("2006-01-02 15:04"))
+}
+
 // notes loads the shared half of the vault with git dates applied.
 func notesFor(settings *config.Config) ([]*vault.Note, error) {
 	notes, err := vault.Collect(settings, settings.IndexFolders())
@@ -250,6 +267,7 @@ func runContext(args []string) error {
 		return emitJSON(index.Brain{Vault: settings.Root, Config: settings, Notes: notes})
 	}
 
+	warnIfStale(settings)
 	raw, err := os.ReadFile(settings.MetaPath("BRAIN.md"))
 	if err != nil {
 		return fmt.Errorf("no index yet; run: aimem refresh")
@@ -275,6 +293,7 @@ func runFind(args []string) error {
 		return fmt.Errorf("usage: aimem find <words> [--type T] [--status S] [--company C] [--tag G]")
 	}
 
+	warnIfStale(settings)
 	notes, err := notesFor(settings)
 	if err != nil {
 		return err
@@ -502,14 +521,64 @@ func runRemember(args []string) error {
 	return nil
 }
 
+// runLog appends a linked line to today's journal. The linking is the point: the bridge
+// only emits lines that link to a shared note, and remembering to type brackets at the
+// moment you finish something is exactly the habit that does not stick.
+func runLog(args []string) error {
+	flags := newFlags("log")
+	project := flags.set.String("project", "", "force a link to this note")
+	settings, err := flags.parse(args)
+	if err != nil {
+		return err
+	}
+	text := strings.Join(flags.set.Args(), " ")
+	if text == "" {
+		return fmt.Errorf("usage: aimem log <what you did> [--project Title]")
+	}
+
+	notes, err := notesFor(settings)
+	if err != nil {
+		return err
+	}
+	entry, err := journal.Append(settings, notes, text, *project, time.Now())
+	if err != nil {
+		return err
+	}
+
+	action := "appended to"
+	if entry.Created {
+		action = "created"
+	}
+	// The journal is private, so its path is printed but never its other contents.
+	fmt.Printf("%s %s\n", action, filepath.Base(entry.Path))
+	fmt.Printf("  %s\n", entry.Line)
+	if entry.Reaches() {
+		fmt.Printf("  reaches the timeline via %s\n", strings.Join(entry.Linked, ", "))
+		return nil
+	}
+	fmt.Printf("  no link to a shared note, so this stays private and will not appear in\n")
+	fmt.Printf("  the timeline. Add one with: aimem log --project <Title> \"...\"\n")
+	return nil
+}
+
 func runRefresh(args []string) error {
 	flags := newFlags("refresh")
 	noJournal := flags.set.Bool("no-journal", false, "skip the daily-journal timeline")
 	noSync := flags.set.Bool("no-sync", false, "skip writing repo context blocks")
 	strict := flags.set.Bool("strict", false, "treat validation warnings as errors")
+	ifStale := flags.set.Bool("if-stale", false, "do nothing unless a note is newer than the index")
 	settings, err := flags.parse(args)
 	if err != nil {
 		return err
+	}
+
+	// --if-stale makes this cheap to run from a timer or a shell hook: the common case
+	// is no work at all, so the index can be kept current without a human remembering.
+	if *ifStale {
+		stale, _, err := index.Stale(settings)
+		if err == nil && !stale {
+			return nil
+		}
 	}
 
 	// Validation gates everything after it. Regenerating from a broken vault propagates
@@ -531,6 +600,13 @@ func runRefresh(args []string) error {
 		fmt.Printf("wrote %s (%d journal files read, %d entries, %d lines held back, %d secrets blocked)\n",
 			result.ActivityPath, result.Journal.FilesRead, len(result.Journal.Entries),
 			result.Journal.LinesSkipped, result.Journal.SecretsFound)
+		// An empty timeline looks identical whether nothing happened or nothing was
+		// linked. Naming the projects written about without brackets is the difference.
+		if missed := result.Journal.UnlinkedTitles(5); len(missed) > 0 {
+			fmt.Printf("  note: journal lines named these without linking them, so they did not\n")
+			fmt.Printf("        reach the timeline: %s\n", strings.Join(missed, ", "))
+			fmt.Printf("        `aimem log \"...\"` adds the links for you.\n")
+		}
 	}
 	fmt.Printf("wrote %s (%d notes, %d bytes)\n", result.BrainPath, result.Notes, result.Bytes)
 	if result.JSONPath != "" {

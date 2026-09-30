@@ -43,8 +43,11 @@ overwrites it. Everything outside them is yours.
 ## The daily loop
 
 1. Capture quickly, in an inbox or a daily note.
-2. Link work to its durable entity: `worked on [[Alpha]]`. This is what feeds the
-   journal bridge; a daily line with no wikilink to a shared note never becomes timeline.
+2. Link work to its durable entity. `aimem log deposit sweep works on alpha` writes
+   `- deposit sweep works on [[Alpha|alpha]]` for you and says whether the line will
+   reach the timeline. A daily line with no wikilink to a shared note never leaves the
+   journal, which is the safety property and also the thing that silently costs you a
+   timeline if you forget.
 3. Let backlinks build the project timeline automatically.
 4. Promote only durable decisions, architecture, and recurring gotchas into project or
    research notes.

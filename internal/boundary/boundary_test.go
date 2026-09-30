@@ -280,3 +280,61 @@ func exchangeRaw(t *testing.T, settings *config.Config, writable bool, requests 
 	}
 	return output.String()
 }
+
+// TestJournalWritingIsNotReachableOverMCP pins the rule that keeps the bridge honest.
+// The bridge extracts journal lines that link to a shared note. If an agent could write
+// into the journal, it could stage its own text there and have the next refresh publish
+// it into shared, agent-readable output: the bridge would become a laundering channel
+// rather than a one-way valve. Journal writing is CLI-only, by a human, on purpose.
+func TestJournalWritingIsNotReachableOverMCP(t *testing.T) {
+	settings := testvault.Build(t)
+
+	for _, writable := range []bool{false, true} {
+		listing := exchangeRaw(t, settings, writable, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+		for _, forbidden := range []string{"vault_log", "journal", "daily"} {
+			if strings.Contains(strings.ToLower(listing), forbidden) {
+				t.Errorf("writable=%v: tool listing exposes %q", writable, forbidden)
+			}
+		}
+	}
+
+	// And the tool genuinely does not exist, not merely unadvertised.
+	answer := exchangeRaw(t, settings, true,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":`+
+			`{"name":"vault_log","arguments":{"text":"staged for extraction"}}}`)
+	if !strings.Contains(answer, "unknown tool") {
+		t.Errorf("vault_log was not rejected: %s", answer)
+	}
+}
+
+// TestUnlinkedDiagnosticsLeakNoProse covers the new bridge diagnostic. It reports which
+// shared notes were named without a link, which is useful, and it must report only the
+// note titles: those are already shared, the sentences around them are not.
+func TestUnlinkedDiagnosticsLeakNoProse(t *testing.T) {
+	settings := testvault.Build(t)
+	testvault.Write(t, settings.Root, "Daily/2026-09-29.md",
+		"# 2026-09-29\n\n"+
+			"- spent the morning on Alpha without linking it\n"+
+			"- Beta is blocked on "+testvault.Canary+"\n"+
+			"- Alpha again, still no brackets #private\n")
+
+	result, err := index.Build(settings, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Journal.Unlinked["Alpha"] == 0 {
+		t.Error("an unlinked mention of a shared note was not reported")
+	}
+	// A #private line opted out, so naming its subject would leak what it was about.
+	if result.Journal.Unlinked["Alpha"] > 1 {
+		t.Error("a #private line was counted, leaking what it was about")
+	}
+
+	for _, rendered := range result.Journal.UnlinkedTitles(10) {
+		testvault.AssertNoCanary(t, "unlinked diagnostic", rendered)
+		if strings.Contains(rendered, "blocked on") || strings.Contains(rendered, "morning") {
+			t.Errorf("diagnostic contains journal prose: %q", rendered)
+		}
+	}
+}

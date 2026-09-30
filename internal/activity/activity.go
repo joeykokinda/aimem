@@ -58,12 +58,46 @@ type Result struct {
 	FilesRead    int
 	LinesSkipped int // had a link, but was excluded
 	SecretsFound int
+
+	// Unlinked counts journal lines that name a shared note in plain text but do not
+	// link to it, so they never reach the timeline. Reporting this is the only way the
+	// bridge's silence is distinguishable from having nothing to say: a vault where
+	// nobody types brackets produces an empty timeline and no complaint.
+	//
+	// Only the note titles are recorded, never the prose. Titles are already shared.
+	Unlinked map[string]int
+}
+
+// UnlinkedTitles returns the shared notes most often mentioned without a link.
+func (r *Result) UnlinkedTitles(limit int) []string {
+	type pair struct {
+		title string
+		count int
+	}
+	var pairs []pair
+	for title, count := range r.Unlinked {
+		pairs = append(pairs, pair{title, count})
+	}
+	sort.Slice(pairs, func(a, b int) bool {
+		if pairs[a].count != pairs[b].count {
+			return pairs[a].count > pairs[b].count
+		}
+		return pairs[a].title < pairs[b].title
+	})
+	var out []string
+	for index, item := range pairs {
+		if limit > 0 && index >= limit {
+			break
+		}
+		out = append(out, fmt.Sprintf("%s (%d)", item.title, item.count))
+	}
+	return out
 }
 
 // Extract walks the configured journal folder and returns entries linking to any of
 // sharedTitles. A vault with no journal configured produces an empty result.
 func Extract(settings *config.Config, sharedTitles map[string]bool) (*Result, error) {
-	result := &Result{}
+	result := &Result{Unlinked: map[string]int{}}
 	if settings.Journal == "" {
 		return result, nil
 	}
@@ -97,6 +131,11 @@ func Extract(settings *config.Config, sharedTitles map[string]bool) (*Result, er
 
 		for _, line := range strings.Split(body, "\n") {
 			entry, skipped, secret := lineEntry(line, date, sharedTitles)
+			if entry == nil && !secret {
+				for _, title := range mentionedTitles(line, sharedTitles) {
+					result.Unlinked[title]++
+				}
+			}
 			if secret {
 				result.SecretsFound++
 				continue
@@ -158,6 +197,64 @@ func lineEntry(line, date string, sharedTitles map[string]bool) (entry *Entry, s
 	}
 
 	return &Entry{Target: target, Date: date, Text: text}, false, false
+}
+
+// mentionedTitles finds shared note names appearing as plain words in a line that did
+// not produce an entry. This is what turns "the timeline is empty" into "these four
+// projects were written about without brackets".
+func mentionedTitles(line string, sharedTitles map[string]bool) []string {
+	// A line that opted out stays opted out; surfacing its subject would leak which
+	// project a #private line was about.
+	stripped := commentPattern.ReplaceAllString(line, "")
+	if strings.TrimSpace(stripped) == "" || hasPrivateTag(stripped) {
+		return nil
+	}
+	lower := strings.ToLower(stripped)
+	linked := map[string]bool{}
+	for _, existing := range vault.WikiLinks(stripped) {
+		linked[strings.ToLower(existing)] = true
+	}
+
+	var found []string
+	for title := range sharedTitles {
+		if title == "" || linked[strings.ToLower(title)] {
+			continue
+		}
+		if containsWord(lower, strings.ToLower(title)) {
+			found = append(found, title)
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+// containsWord matches a title only at word boundaries, so a project called "Go" is not
+// found inside "going".
+func containsWord(haystack, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	for offset := 0; ; {
+		index := strings.Index(haystack[offset:], needle)
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(needle)
+		beforeOK := start == 0 || !isWordByte(haystack[start-1])
+		afterOK := end == len(haystack) || !isWordByte(haystack[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		offset = start + 1
+		if offset >= len(haystack) {
+			return false
+		}
+	}
+}
+
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
 }
 
 // hasPrivateTag reports whether the line opts out with #private, as a whole tag rather

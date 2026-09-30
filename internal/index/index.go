@@ -30,6 +30,35 @@ type Brain struct {
 	Notes     []*vault.Note  `json:"notes"`
 }
 
+// Stale reports whether the generated index is older than the newest note it claims to
+// describe. Refresh is fast enough to run constantly, but nothing runs it automatically
+// between vault commits, so the index can silently drift behind the notes. Callers use
+// this to warn rather than to serve something they know is wrong.
+func Stale(settings *config.Config) (bool, time.Time, error) {
+	generated, err := os.Stat(settings.MetaPath("BRAIN.md"))
+	if err != nil {
+		return true, time.Time{}, err
+	}
+
+	var newest time.Time
+	for _, folder := range settings.IndexFolders() {
+		root := filepath.Join(settings.Root, folder)
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // a missing shared folder is the validator's problem, not ours
+			}
+			if !info.IsDir() && strings.HasSuffix(path, ".md") && info.ModTime().After(newest) {
+				newest = info.ModTime()
+			}
+			return nil
+		})
+		if err != nil {
+			return false, newest, err
+		}
+	}
+	return newest.After(generated.ModTime()), newest, nil
+}
+
 // Result reports what a build produced, in counts only, so it is safe to print in front
 // of an agent even though the journal bridge read private files to produce it.
 type Result struct {
@@ -137,7 +166,11 @@ func render(settings *config.Config, notes []*vault.Note, lastTouched map[string
 	writeResearch(&out, notes)
 	writeIdeas(&out, notes)
 	writeReference(&out, notes)
-	writeRepoMap(&out, notes)
+	if settings.IndexRepoMap {
+		writeRepoMap(&out, notes)
+	} else {
+		writeRepoPointer(&out, notes)
+	}
 	writeOrphans(&out, notes)
 
 	return out.String()
@@ -400,6 +433,24 @@ func writeReference(out *strings.Builder, notes []*vault.Note) {
 		names = append(names, fmt.Sprintf("%s (`%s`)", note.Title, note.Path))
 	}
 	out.WriteString(strings.Join(names, ", ") + "\n\n")
+}
+
+// writeRepoPointer replaces the repo table with a count and the commands that answer the
+// question precisely. The table is the largest fixed block in the file and is read end to
+// end by nobody; an agent standing in a checkout wants one answer, not forty rows.
+func writeRepoPointer(out *strings.Builder, notes []*vault.Note) {
+	mapped := 0
+	for _, note := range notes {
+		if note.Repo != "" {
+			mapped++
+		}
+	}
+	if mapped == 0 {
+		return
+	}
+	out.WriteString("## Repo Map\n\n")
+	out.WriteString(fmt.Sprintf("%d notes map to a checkout on disk. Rather than listing them here, ask:\n", mapped))
+	out.WriteString("`aimem project` for the repo you are in, or `aimem context --json` for all of them.\n\n")
 }
 
 func writeRepoMap(out *strings.Builder, notes []*vault.Note) {

@@ -195,3 +195,26 @@ func TestFolderTiersAreRequired(t *testing.T) {
 		}
 	}
 }
+
+func TestJournalFilenameMustVaryWithTheDate(t *testing.T) {
+	for _, layout := range []string{"daily", "", "notes/2006-01-02"} {
+		settings := Default("/tmp/vault")
+		settings.JournalFilename = layout
+		if err := settings.Validate(); err == nil {
+			t.Errorf("Validate accepted journal_filename %q", layout)
+		}
+	}
+	for _, layout := range []string{"2006-01-02", "2006_01_02", "20060102", "Jan-2-2006"} {
+		settings := Default("/tmp/vault")
+		settings.JournalFilename = layout
+		if err := settings.Validate(); err != nil {
+			t.Errorf("Validate rejected a usable layout %q: %v", layout, err)
+		}
+	}
+	// With no journal configured the layout is irrelevant and must not block loading.
+	settings := Default("/tmp/vault")
+	settings.Journal, settings.JournalFilename = "", ""
+	if err := settings.Validate(); err != nil {
+		t.Errorf("Validate rejected a vault with no journal: %v", err)
+	}
+}
