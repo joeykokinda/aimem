@@ -136,3 +136,79 @@ func TestAppendRefusesSecretsAndBadJournals(t *testing.T) {
 		t.Error("wrote with no journal configured")
 	}
 }
+
+func TestAppendCommitsDedupesBySHA(t *testing.T) {
+	settings := config.Default(t.TempDir())
+	note := &vault.Note{Title: "Aimem", Repo: "/tmp/aimem"}
+	when := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+
+	commits := []Commit{
+		{SHA: "aaa1111", Subject: "Fix the parser", Note: note},
+		{SHA: "bbb2222", Subject: "Add a test", Note: note},
+	}
+
+	added, path, err := AppendCommits(settings, commits, when)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 2 {
+		t.Fatalf("added = %d, want 2", added)
+	}
+
+	// Running again must add nothing: this is what makes it safe on a timer or a hook.
+	again, _, err := AppendCommits(settings, commits, when)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != 0 {
+		t.Errorf("re-run added %d lines, want 0", again)
+	}
+
+	// A genuinely new commit still lands.
+	third := append(commits, Commit{SHA: "ccc3333", Subject: "Ship it", Note: note})
+	added, _, err = AppendCommits(settings, third, when)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 1 {
+		t.Errorf("added = %d, want only the new commit", added)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Count(text, "aaa1111") != 1 {
+		t.Error("a commit was recorded twice")
+	}
+	if !strings.Contains(text, "- [[Aimem]] Fix the parser (aaa1111)") {
+		t.Errorf("line is not linked correctly:\n%s", text)
+	}
+	if strings.Count(text, "type: journal") != 1 {
+		t.Error("frontmatter was duplicated")
+	}
+}
+
+func TestAppendCommitsSkipsSecretsAndBadJournals(t *testing.T) {
+	settings := config.Default(t.TempDir())
+	note := &vault.Note{Title: "Aimem"}
+	when := time.Now()
+
+	added, _, err := AppendCommits(settings, []Commit{
+		{SHA: "ddd4444", Subject: "set token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Note: note},
+		{SHA: "eee5555", Subject: "an ordinary commit", Note: note},
+	}, when)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 1 {
+		t.Errorf("added = %d, want 1 (the secret-bearing subject must be dropped)", added)
+	}
+
+	shared := config.Default(t.TempDir())
+	shared.Journal = shared.Shared[0]
+	if _, _, err := AppendCommits(shared, []Commit{{SHA: "f", Subject: "x", Note: note}}, when); err == nil {
+		t.Error("wrote commits to a journal outside the private tier")
+	}
+}

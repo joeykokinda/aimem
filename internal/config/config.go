@@ -28,6 +28,12 @@ type Config struct {
 	Root string `json:"root"` // absolute path; resolved, never read from the file
 	Name string `json:"name"`
 
+	// CodeRoot is where this machine keeps checkouts. A note's `repo:` may be written
+	// relative to it, which is what lets one vault work on several machines: the note
+	// says "company/turtosa" and each machine resolves that against its own layout.
+	// An absolute `repo:` still works and still means exactly one machine.
+	CodeRoot string `json:"code_root"`
+
 	// Folder tiers. Shared is indexed and searchable, Private is never opened except by
 	// the audited journal bridge, Locked is never opened at all, and Meta is validated
 	// but excluded from the index because it holds the generated output itself.
@@ -70,6 +76,7 @@ func Default(root string) *Config {
 	return &Config{
 		Root:                     root,
 		Name:                     filepath.Base(root),
+		CodeRoot:                 "~",
 		Shared:                   []string{"Companies", "Projects", "Research", "Ideas", "Reference"},
 		Private:                  []string{"Inbox", "Daily", "Personal"},
 		Locked:                   "Locked",
@@ -198,6 +205,7 @@ func Load(root string) (*Config, error) {
 	loaded := &Config{
 		Root:                     root,
 		Name:                     firstNonEmpty(tree.text("name"), defaults.Name),
+		CodeRoot:                 firstNonEmpty(tree.text("code_root"), defaults.CodeRoot),
 		Shared:                   folders.list("shared"),
 		Private:                  folders.list("private"),
 		Locked:                   folders.text("locked"),
@@ -310,6 +318,44 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// ResolveRepo turns a note's `repo:` value into an absolute path on this machine.
+//
+// Three forms are accepted, in decreasing order of portability:
+//   - relative ("company/turtosa"), resolved against CodeRoot
+//   - home-relative ("~/Projects/thing")
+//   - absolute ("/home/someone/Projects/thing"), which only ever matches one machine
+//
+// The raw value is what lives in the note and travels; this is what the filesystem sees.
+func (c *Config) ResolveRepo(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "~") || filepath.IsAbs(raw) {
+		return expand(raw)
+	}
+	return filepath.Join(expand(c.CodeRoot), filepath.FromSlash(raw))
+}
+
+// PortableRepo rewrites an absolute path into the shortest portable form this config can
+// resolve back to it. Used to migrate a vault whose notes were written on one machine.
+func (c *Config) PortableRepo(absolute string) string {
+	absolute = expand(absolute)
+	if codeRoot := expand(c.CodeRoot); codeRoot != "" {
+		if relative, err := filepath.Rel(codeRoot, absolute); err == nil &&
+			!strings.HasPrefix(relative, "..") && relative != "." {
+			return filepath.ToSlash(relative)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if relative, err := filepath.Rel(home, absolute); err == nil &&
+			!strings.HasPrefix(relative, "..") && relative != "." {
+			return "~/" + filepath.ToSlash(relative)
+		}
+	}
+	return absolute
+}
+
 // IsPrivate reports whether a vault-relative path falls in the private or locked tier.
 // Everything that walks the vault asks this rather than reimplementing the check.
 func (c *Config) IsPrivate(relative string) bool {
@@ -358,6 +404,10 @@ func (c *Config) Write() error {
 	out.WriteString("# This file is the only place aimem learns anything about this vault.\n")
 	out.WriteString("# It lives at the vault root so it travels with the notes it describes.\n\n")
 	out.WriteString(fmt.Sprintf("name: %s\n\n", c.Name))
+	out.WriteString("# Where this machine keeps code checkouts. A note's `repo:` written\n")
+	out.WriteString("# relative to this (\"company/thing\") resolves per machine, so one vault\n")
+	out.WriteString("# works on a laptop and a desktop with different layouts.\n")
+	out.WriteString(fmt.Sprintf("code_root: %s\n\n", c.CodeRoot))
 
 	out.WriteString("# Folder tiers. This is the privacy boundary, not a preference.\n")
 	out.WriteString("#   shared  indexed, searchable, exposed to agents\n")

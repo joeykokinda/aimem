@@ -45,6 +45,7 @@ Example config (`.aimem.yml`, at the root of your vault):
 
 ```yaml
 name: Notes
+code_root: ~/Projects     # repo: paths may be written relative to this
 
 folders:
   shared: [Companies, Projects, Research, Ideas, Reference]
@@ -97,9 +98,46 @@ There's a test suite that puts a marker string in every private file, then check
 | `aimem validate` | Check your notes for problems |
 | `aimem doctor` | Check that the whole setup works |
 | `aimem mcp` | Serve your notes to agents |
+| `aimem portable` | Rewrite absolute repo paths so the vault works anywhere |
 | `aimem init` / `use` | Set up a vault, or point at one |
 
 Most commands take `--json`.
+
+## Using one vault on several machines
+
+Your notes are a git repo, so syncing them is `git pull`. Two things make the *tooling*
+work on the other machine:
+
+```bash
+git clone <your notes remote> ~/notes
+aimem use ~/notes        # the only per-machine setup
+aimem refresh
+```
+
+The config lives in the vault, so there is nothing to recreate.
+
+The part that used to break is `repo:` paths. An absolute path names exactly one machine,
+so a vault written on your laptop resolves to nothing on your desktop. Write them
+relative to `code_root` instead:
+
+```yaml
+code_root: ~/Projects      # in .aimem.yml
+
+repo: company/turtosa      # in a note -> ~/Projects/company/turtosa on any machine
+repo: ~/Code/thing         # home-relative also works
+repo: /opt/thing           # absolute still works, but only on one machine
+```
+
+To convert an existing vault:
+
+```bash
+aimem portable             # show what would change
+aimem portable --write     # apply
+```
+
+It only rewrites a path when the shorter form resolves back to the same directory, so it
+cannot silently repoint a note at a different checkout. `aimem validate` warns about any
+absolute path left over.
 
 ## Notes format
 

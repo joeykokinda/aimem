@@ -25,7 +25,8 @@ type Note struct {
 	Type     string   `json:"type,omitempty"`
 	Status   string   `json:"status,omitempty"`
 	Company  string   `json:"company,omitempty"`
-	Repo     string   `json:"repo,omitempty"`
+	Repo     string   `json:"repo,omitempty"`     // resolved absolute path on this machine
+	RepoRaw  string   `json:"repo_raw,omitempty"` // exactly as written in the note
 	Horizon  string   `json:"horizon,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
 	Summary  string   `json:"summary,omitempty"`
@@ -70,7 +71,7 @@ func Collect(settings *config.Config, folders []string) ([]*Note, error) {
 			if err != nil {
 				return err
 			}
-			note, err := Parse(path, relative, info)
+			note, err := Parse(settings, path, relative, info)
 			if err != nil {
 				return err
 			}
@@ -87,7 +88,7 @@ func Collect(settings *config.Config, folders []string) ([]*Note, error) {
 	return notes, nil
 }
 
-func Parse(absolute, relative string, info os.FileInfo) (*Note, error) {
+func Parse(settings *config.Config, absolute, relative string, info os.FileInfo) (*Note, error) {
 	raw, err := os.ReadFile(absolute)
 	if err != nil {
 		return nil, err
@@ -106,7 +107,8 @@ func Parse(absolute, relative string, info os.FileInfo) (*Note, error) {
 		Type:     fields["type"],
 		Status:   fields["status"],
 		Company:  fields["company"],
-		Repo:     fields["repo"],
+		RepoRaw:  fields["repo"],
+		Repo:     settings.ResolveRepo(fields["repo"]),
 		Horizon:  fields["horizon"],
 		Tags:     SplitList(fields["tags"]),
 		Summary:  FirstProse(rest),

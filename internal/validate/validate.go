@@ -178,14 +178,17 @@ func checkRepos(settings *config.Config, notes []*vault.Note) []problem {
 			}
 			continue
 		}
-		if !filepath.IsAbs(note.Repo) {
-			found = append(found, problem{"error", "relative-repo", note.Path, 0,
-				fmt.Sprintf("repo %q is not an absolute path", note.Repo)})
-			continue
+		// An absolute path names exactly one machine. That used to be required; it is now
+		// the least portable option, because a vault synced to a second machine with a
+		// different username or layout resolves every one of them to nothing.
+		if filepath.IsAbs(note.RepoRaw) {
+			found = append(found, problem{"warn", "absolute-repo", note.Path, 0,
+				fmt.Sprintf("repo %q is absolute and will not resolve on another machine; run `aimem portable` to rewrite it",
+					note.RepoRaw)})
 		}
 		if !note.RepoOK {
 			found = append(found, problem{"warn", "missing-repo", note.Path, 0,
-				fmt.Sprintf("repo %q does not exist on disk", note.Repo)})
+				fmt.Sprintf("repo %q resolves to %q, which does not exist on disk", note.RepoRaw, note.Repo)})
 		}
 	}
 	return found

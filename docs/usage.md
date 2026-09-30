@@ -180,9 +180,16 @@ That is the whole procedure. The vault config travels with the vault, so there i
 to recreate; `aimem use` records the one thing that cannot live inside the vault, which is
 where the vault is.
 
-One real limitation worth knowing: **`repo:` fields are absolute paths.** A vault shared
-across machines with different directory layouts will show missing repos on every machine
-but one. That is a genuine limitation, not a bug to work around by faking paths.
+Write `repo:` fields relative to `code_root` so they resolve on every machine:
+
+```yaml
+code_root: ~/Projects     # .aimem.yml
+repo: company/turtosa     # a note
+```
+
+An absolute `repo:` still works but names exactly one machine. `aimem portable` converts
+an existing vault, and only rewrites a path when the shorter form resolves back to the
+same directory. `aimem validate` warns about the ones left over.
 
 ---
 

@@ -21,6 +21,7 @@ package journal
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -177,4 +178,119 @@ func replaceOutsideLinks(text string, pattern *regexp.Regexp, replace func(strin
 		out.WriteString(rest[open : open+closing+2])
 		rest = rest[open+closing+2:]
 	}
+}
+
+// Commit is one commit found in a mapped repository.
+type Commit struct {
+	SHA     string
+	Subject string
+	Note    *vault.Note
+}
+
+// FromGit collects commits you authored since a cutoff, across every repository a vault
+// note claims.
+//
+// This is the automatic half of journaling. `aimem log` still needs you to type a
+// sentence, and the things worth typing are the ones git cannot see: why you chose
+// something, what you ruled out. But "which projects did I touch today" is already
+// recorded, with timestamps, in repositories that already map to notes. Deriving it
+// costs nothing and makes the timeline populate itself.
+//
+// Only commits by the given author count. A repository you contribute to alongside other
+// people would otherwise fill your journal with their work.
+func FromGit(notes []*vault.Note, author string, since time.Time) ([]Commit, error) {
+	var found []Commit
+	for _, note := range notes {
+		if note.Repo == "" {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(note.Repo, ".git")); err != nil || info == nil {
+			continue
+		}
+		arguments := []string{
+			"-C", note.Repo, "log",
+			"--since=" + since.Format("2006-01-02T15:04:05"),
+			"--no-merges", "--pretty=format:%h\x1f%s",
+		}
+		if author != "" {
+			arguments = append(arguments, "--author="+author)
+		}
+		output, err := exec.Command("git", arguments...).Output()
+		if err != nil {
+			continue // a repo that cannot be read is not an error worth stopping for
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			sha, subject, ok := strings.Cut(line, "\x1f")
+			if !ok || strings.TrimSpace(subject) == "" {
+				continue
+			}
+			found = append(found, Commit{SHA: sha, Subject: strings.TrimSpace(subject), Note: note})
+		}
+	}
+	sort.SliceStable(found, func(a, b int) bool { return found[a].Note.Title < found[b].Note.Title })
+	return found, nil
+}
+
+// GitAuthor returns the email git would attribute commits to, which is the filter that
+// keeps other people's commits out of your journal.
+func GitAuthor(repo string) string {
+	arguments := []string{"config", "user.email"}
+	if repo != "" {
+		arguments = append([]string{"-C", repo}, arguments...)
+	}
+	output, err := exec.Command("git", arguments...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// AppendCommits writes one journal line per commit, skipping any already recorded.
+//
+// Each line carries its short SHA, which is what makes this safe to run repeatedly: on
+// a timer, from a shell hook, or twice by hand. The SHA is the dedupe key, so re-running
+// adds only what is new.
+func AppendCommits(settings *config.Config, commits []Commit, when time.Time) (int, string, error) {
+	if settings.Journal == "" {
+		return 0, "", fmt.Errorf("no journal folder is configured; set folders.journal in %s", config.FileName)
+	}
+	if !settings.IsPrivate(settings.Journal) {
+		return 0, "", fmt.Errorf("journal folder %q is not in the private tier; refusing to write", settings.Journal)
+	}
+
+	directory := filepath.Join(settings.Root, settings.Journal)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return 0, "", err
+	}
+	path := filepath.Join(directory, when.Format(settings.JournalFilename)+".md")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, path, err
+	}
+	body := string(existing)
+	if body == "" {
+		body = fmt.Sprintf("---\ntype: journal\ndate: %s\n---\n# %s\n",
+			when.Format("2006-01-02"), when.Format("2006-01-02"))
+	}
+
+	var added int
+	var lines []string
+	for _, commit := range commits {
+		if strings.Contains(body, "("+commit.SHA+")") {
+			continue
+		}
+		// A commit subject is text the author wrote, and it lands in a committed file.
+		if vault.MatchSecret(commit.Subject) != "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- [[%s]] %s (%s)", commit.Note.Title, commit.Subject, commit.SHA))
+		added++
+	}
+	if added == 0 {
+		return 0, path, nil
+	}
+
+	updated := strings.TrimRight(body, "\n") + "\n" + strings.Join(lines, "\n") + "\n"
+	return added, path, os.WriteFile(path, []byte(updated), 0o644)
 }

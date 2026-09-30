@@ -218,3 +218,50 @@ func TestJournalFilenameMustVaryWithTheDate(t *testing.T) {
 		t.Errorf("Validate rejected a vault with no journal: %v", err)
 	}
 }
+
+// TestRepoPathsArePortable covers the property that makes one vault usable on several
+// machines: a note says where a checkout lives in terms each machine can resolve for
+// itself, instead of hardcoding one person's home directory.
+func TestRepoPathsArePortable(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	settings := Default("/tmp/vault")
+	settings.CodeRoot = filepath.Join(home, "Projects")
+
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{"company/turtosa", filepath.Join(home, "Projects", "company", "turtosa")},
+		{"~/Code/thing", filepath.Join(home, "Code", "thing")},
+		{"/opt/elsewhere", "/opt/elsewhere"},
+		{"", ""},
+	}
+	for _, test := range tests {
+		if got := settings.ResolveRepo(test.raw); got != test.want {
+			t.Errorf("ResolveRepo(%q) = %q, want %q", test.raw, got, test.want)
+		}
+	}
+
+	// And the migration direction: an absolute path becomes the shortest form that
+	// resolves back to the same directory. Round-tripping is the safety property —
+	// a rewrite that pointed at a different checkout would be worse than no rewrite.
+	for _, absolute := range []string{
+		filepath.Join(home, "Projects", "company", "turtosa"),
+		filepath.Join(home, "Code", "thing"),
+		"/opt/elsewhere",
+	} {
+		portable := settings.PortableRepo(absolute)
+		if got := settings.ResolveRepo(portable); got != absolute {
+			t.Errorf("PortableRepo(%q) = %q, which resolves to %q", absolute, portable, got)
+		}
+	}
+
+	// A path under CodeRoot must produce the shortest form, not merely a working one.
+	inside := filepath.Join(home, "Projects", "aimem")
+	if got := settings.PortableRepo(inside); got != "aimem" {
+		t.Errorf("PortableRepo(%q) = %q, want the code-root-relative form", inside, got)
+	}
+}

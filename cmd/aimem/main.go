@@ -45,6 +45,7 @@ Reading
 Writing
   remember <fact>       Append a durable fact to this repo's note
   log <what you did>    Add a linked line to today's journal
+  log --from-git        Add a line for each commit you authored today
   refresh               Validate, rebuild the index, sync repo context
 
 Setup
@@ -52,6 +53,7 @@ Setup
   use <path>            Point this machine at an existing vault
   config                Print the resolved vault contract
   doctor                Check the install, the config, and the boundary
+  portable              Rewrite absolute repo: paths so the vault works anywhere
   validate              Check the vault against its config
   mcp                   Serve the vault to agents over MCP (read-only)
   install-hooks         Install the vault's pre-commit hook
@@ -104,6 +106,8 @@ func main() {
 		err = runConfig(args)
 	case "doctor":
 		err = runDoctor(args)
+	case "portable":
+		err = runPortable(args)
 	case "mcp":
 		err = runMCP(args)
 	case "install-hooks":
@@ -527,18 +531,26 @@ func runRemember(args []string) error {
 func runLog(args []string) error {
 	flags := newFlags("log")
 	project := flags.set.String("project", "", "force a link to this note")
+	fromGit := flags.set.Bool("from-git", false, "add a line for each commit you authored today")
+	since := flags.set.String("since", "", "with --from-git: how far back, as YYYY-MM-DD (default: today)")
+	author := flags.set.String("author", "", "with --from-git: commit author to match (default: your git email)")
 	settings, err := flags.parse(args)
 	if err != nil {
 		return err
-	}
-	text := strings.Join(flags.set.Args(), " ")
-	if text == "" {
-		return fmt.Errorf("usage: aimem log <what you did> [--project Title]")
 	}
 
 	notes, err := notesFor(settings)
 	if err != nil {
 		return err
+	}
+
+	if *fromGit {
+		return logFromGit(settings, notes, *since, *author)
+	}
+
+	text := strings.Join(flags.set.Args(), " ")
+	if text == "" {
+		return fmt.Errorf("usage: aimem log <what you did> [--project Title]\n   or: aimem log --from-git")
 	}
 	entry, err := journal.Append(settings, notes, text, *project, time.Now())
 	if err != nil {
@@ -558,6 +570,63 @@ func runLog(args []string) error {
 	}
 	fmt.Printf("  no link to a shared note, so this stays private and will not appear in\n")
 	fmt.Printf("  the timeline. Add one with: aimem log --project <Title> \"...\"\n")
+	return nil
+}
+
+// logFromGit turns today's commits into journal lines. Everything here is already
+// recorded in git; the value is that it lands in the journal already linked, so the
+// timeline fills in without anyone remembering to write it down.
+func logFromGit(settings *config.Config, notes []*vault.Note, since, author string) error {
+	cutoff := time.Now().Truncate(24 * time.Hour)
+	if since != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", since, time.Local)
+		if err != nil {
+			return fmt.Errorf("--since must be YYYY-MM-DD: %w", err)
+		}
+		cutoff = parsed
+	} else {
+		now := time.Now()
+		cutoff = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	}
+
+	if author == "" {
+		author = journal.GitAuthor(settings.Root)
+	}
+	if author == "" {
+		return fmt.Errorf("could not determine your git email; pass --author")
+	}
+
+	commits, err := journal.FromGit(notes, author, cutoff)
+	if err != nil {
+		return err
+	}
+	if len(commits) == 0 {
+		fmt.Printf("No commits by %s since %s in any mapped repo.\n", author, cutoff.Format("2006-01-02"))
+		return nil
+	}
+
+	added, path, err := journal.AppendCommits(settings, commits, time.Now())
+	if err != nil {
+		return err
+	}
+	if added == 0 {
+		fmt.Printf("%d commits found, all already in %s.\n", len(commits), filepath.Base(path))
+		return nil
+	}
+	fmt.Printf("added %d of %d commits to %s\n", added, len(commits), filepath.Base(path))
+
+	// Names only, never the commit subjects: the journal is private and this may be
+	// running from a hook whose output goes somewhere unexpected.
+	seen := map[string]bool{}
+	var projects []string
+	for _, commit := range commits {
+		if !seen[commit.Note.Title] {
+			seen[commit.Note.Title] = true
+			projects = append(projects, commit.Note.Title)
+		}
+	}
+	fmt.Printf("  projects: %s\n", strings.Join(projects, ", "))
+	fmt.Printf("  run `aimem refresh` to publish these into the timeline\n")
 	return nil
 }
 
@@ -854,6 +923,83 @@ func orNone(value string) string {
 		return "(none)"
 	}
 	return value
+}
+
+// runPortable rewrites absolute `repo:` fields into forms that resolve on any machine.
+//
+// A vault is only portable if the paths inside it are. Notes written on one machine
+// carry that machine's home directory, so a second machine resolves every repo to
+// nothing and `aimem project` stops working there entirely.
+func runPortable(args []string) error {
+	flags := newFlags("portable")
+	apply := flags.set.Bool("write", false, "apply the changes (default: show what would change)")
+	settings, err := flags.parse(args)
+	if err != nil {
+		return err
+	}
+	notes, err := notesFor(settings)
+	if err != nil {
+		return err
+	}
+
+	type change struct {
+		note *vault.Note
+		to   string
+	}
+	var changes []change
+	for _, note := range notes {
+		if note.RepoRaw == "" || !filepath.IsAbs(note.RepoRaw) {
+			continue
+		}
+		portable := settings.PortableRepo(note.RepoRaw)
+		// Only rewrite when the shorter form resolves back to the same directory.
+		// Silently repointing a note at a different checkout would be much worse than
+		// leaving an absolute path alone.
+		if portable == note.RepoRaw || settings.ResolveRepo(portable) != note.Repo {
+			continue
+		}
+		changes = append(changes, change{note, portable})
+	}
+
+	if len(changes) == 0 {
+		fmt.Println("Every repo path is already portable.")
+		return nil
+	}
+	for _, item := range changes {
+		fmt.Printf("%s\n  %s\n  -> %s\n", item.note.Path, item.note.RepoRaw, item.to)
+	}
+	if !*apply {
+		fmt.Printf("\n%d notes would change. Re-run with --write to apply.\n", len(changes))
+		return nil
+	}
+
+	for _, item := range changes {
+		if err := rewriteRepoField(item.note, item.to); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("\nRewrote %d notes. Run `aimem refresh`.\n", len(changes))
+	return nil
+}
+
+// rewriteRepoField replaces only the repo line in a note's frontmatter, leaving every
+// other byte of the file untouched.
+func rewriteRepoField(note *vault.Note, value string) error {
+	raw, err := os.ReadFile(note.Abs)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(raw), "\n")
+	for index, line := range lines {
+		if index > 0 && strings.HasPrefix(line, "---") {
+			break // past the frontmatter block
+		}
+		if key, _, found := strings.Cut(line, ":"); found && strings.TrimSpace(key) == "repo" {
+			lines[index] = "repo: " + value
+			return os.WriteFile(note.Abs, []byte(strings.Join(lines, "\n")), 0o644)
+		}
+	}
+	return fmt.Errorf("no repo: line found in %s", note.Path)
 }
 
 func runDoctor(args []string) error {
