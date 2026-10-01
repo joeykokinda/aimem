@@ -1209,6 +1209,17 @@ func runDoctor(args []string) error {
 	fmt.Printf("aimem %s\n", Version)
 	fmt.Printf("vault: %s\n\n", *flags.vault)
 
+	// A build from a dirty tree is the one case where the version string is a lie, and
+	// "is my install current" is exactly what someone running doctor is asking.
+	switch {
+	case Version == "dev":
+		fmt.Println("warn  build: version is \"dev\"; this binary was built without version info")
+	case strings.HasSuffix(Version, "-dirty"):
+		fmt.Println("warn  build: built from a tree with uncommitted changes, so the version is not a commit")
+	default:
+		fmt.Printf("ok    build: %s\n", Version)
+	}
+
 	if err != nil {
 		fmt.Printf("FAIL  config: %v\n", err)
 		return fmt.Errorf("vault is not configured")
