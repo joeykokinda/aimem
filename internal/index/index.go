@@ -18,6 +18,7 @@ import (
 
 	"github.com/joeykokinda/aimem/internal/activity"
 	"github.com/joeykokinda/aimem/internal/config"
+	"github.com/joeykokinda/aimem/internal/profile"
 	"github.com/joeykokinda/aimem/internal/vault"
 )
 
@@ -68,6 +69,11 @@ type Result struct {
 	Notes        int
 	Bytes        int
 	Journal      *activity.Result
+
+	// Counts of agent-written content awaiting review. Reported so the quarantine is
+	// visible: a queue nobody is told about is just a place things go to be forgotten.
+	PendingNotes int
+	PendingFacts int
 }
 
 // Build regenerates every derived artifact from the vault: the journal timeline, the
@@ -82,6 +88,12 @@ func Build(settings *config.Config, jsonPath string, skipJournal bool) (*Result,
 	vault.ApplyGitDates(settings.Root, notes)
 
 	result := &Result{Notes: len(notes)}
+	for _, note := range notes {
+		if note.Unreviewed() {
+			result.PendingNotes++
+		}
+		result.PendingFacts += len(note.UnreviewedFacts())
+	}
 	lastTouched := map[string]string{}
 	if !skipJournal {
 		titles := map[string]bool{}
@@ -160,6 +172,22 @@ func render(settings *config.Config, notes []*vault.Note, lastTouched map[string
 	out.WriteString("[[Activity]].\n\n")
 	out.WriteString(fmt.Sprintf("Vault: `%s`  \nGenerated: %s  \nIndexed notes: %d\n\n", settings.Root, today(), len(notes)))
 
+	// Agent-written notes are held out of every section below until a human promotes
+	// them. This is the whole junk-control story: an unreviewed note costs nothing
+	// because it is not in the file each session reads, so agents can write freely and
+	// triage can wait.
+	var reviewed, pending []*vault.Note
+	for _, note := range notes {
+		if note.Unreviewed() {
+			pending = append(pending, note)
+			continue
+		}
+		reviewed = append(reviewed, note)
+	}
+	notes = reviewed
+
+	writeUnreviewed(&out, pending)
+	writeProfile(&out, profile.Build(settings, notes, lastTouched))
 	writeAttention(&out, settings, notes, lastTouched)
 	writeCompanies(&out, notes)
 	writeProjects(&out, settings, notes, lastTouched)
@@ -174,6 +202,96 @@ func render(settings *config.Config, notes []*vault.Note, lastTouched map[string
 	writeOrphans(&out, notes)
 
 	return out.String()
+}
+
+// writeUnreviewed names what is waiting without describing it. A count and a list of
+// titles is enough to decide whether to run `aimem review`; summarizing the content here
+// would reintroduce exactly the per-session cost the quarantine exists to avoid.
+func writeUnreviewed(out *strings.Builder, pending []*vault.Note) {
+	if len(pending) == 0 {
+		return
+	}
+	out.WriteString(fmt.Sprintf("## Unreviewed (%d)\n\n", len(pending)))
+	out.WriteString("Written by an agent and not promoted yet, so they are deliberately not\n")
+	out.WriteString("described here. Triage with `aimem review`.\n\n")
+	var names []string
+	for _, note := range pending {
+		names = append(names, fmt.Sprintf("%s (`%s`)", note.Title, note.Path))
+	}
+	sort.Strings(names)
+	out.WriteString(strings.Join(names, ", ") + "\n\n")
+}
+
+// writeProfile leads with who this person is and what they are doing right now, because
+// it is the context an agent needs before it needs any particular project. It is derived
+// on every refresh, so unlike a hand-written "about me" it cannot be out of date.
+func writeProfile(out *strings.Builder, derived *profile.Profile) {
+	if len(derived.Languages) == 0 && len(derived.Subjects) == 0 {
+		return
+	}
+	out.WriteString("## Profile\n\n")
+	out.WriteString("Derived on every refresh from the repos these notes claim and the tags on\n")
+	out.WriteString("notes that have been touched recently. Not hand-maintained, so not stale.\n\n")
+
+	if len(derived.ActiveNow) > 0 {
+		out.WriteString(fmt.Sprintf("**Working on now:** %s\n\n", strings.Join(derived.ActiveNow, ", ")))
+	}
+	if top := topNames(derived.Languages, 6); len(top) > 0 {
+		out.WriteString(fmt.Sprintf("**Writes:** %s  \n", strings.Join(top, ", ")))
+		out.WriteString(fmt.Sprintf("*(from %d checkouts on disk)*\n\n", derived.ReposWalked))
+	}
+	if top := topNames(derived.Subjects, 10); len(top) > 0 {
+		out.WriteString(fmt.Sprintf("**Subjects:** %s\n\n", strings.Join(top, ", ")))
+	}
+	if top := topNames(derived.Companies, 5); len(top) > 0 {
+		out.WriteString(fmt.Sprintf("**Companies:** %s\n\n", strings.Join(top, ", ")))
+	}
+	if len(derived.Capability) > 0 {
+		shown := derived.Capability
+		if len(shown) > 8 {
+			shown = shown[:8]
+		}
+		out.WriteString("**On hand** (accounts, hosts, hardware), recorded by hand because it cannot\n")
+		out.WriteString("be derived: " + strings.Join(shown, ", ") + "\n\n")
+	}
+	if len(derived.Clusters) > 0 {
+		out.WriteString("**Related work.** Notes sharing a subject, so a lesson from one probably\n")
+		out.WriteString("applies to the others:\n\n")
+		for _, cluster := range derived.Clusters {
+			// Named, then truncated. A cluster's value is knowing the theme exists and
+			// where to start; `aimem find --tag <reason>` returns the whole set, and
+			// printing it here would be paid for on every session.
+			shown := cluster.Notes
+			overflow := 0
+			if len(shown) > 6 {
+				overflow = len(shown) - 6
+				shown = shown[:6]
+			}
+			out.WriteString(fmt.Sprintf("- `%s`: %s", cluster.Reason, strings.Join(shown, ", ")))
+			if overflow > 0 {
+				out.WriteString(fmt.Sprintf(", +%d more (`aimem find --tag %s`)", overflow, cluster.Reason))
+			}
+			out.WriteString("\n")
+		}
+		out.WriteString("\n")
+	}
+}
+
+// topNames renders the leading entries with their live-vs-total evidence, so a reader can
+// tell current work from history.
+func topNames(items []profile.Weighted, limit int) []string {
+	var out []string
+	for index, item := range items {
+		if index >= limit {
+			break
+		}
+		if item.Active > 0 && item.Active != item.Count {
+			out = append(out, fmt.Sprintf("%s (%d, %d active)", item.Name, item.Count, item.Active))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s (%d)", item.Name, item.Count))
+	}
+	return out
 }
 
 func byType(notes []*vault.Note, kind string) []*vault.Note {

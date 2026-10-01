@@ -92,6 +92,8 @@ There's a test suite that puts a marker string in every private file, then check
 | `aimem project` | Which note describes the repo you're in |
 | `aimem log <what you did>` | Add a line to today's journal, auto-linked |
 | `aimem remember <fact>` | Save a fact to this repo's note |
+| `aimem profile` | What you work on, what you write, how it connects |
+| `aimem review` | Triage what agents wrote: promote or drop |
 | `aimem activity [project]` | What happened recently, from your journal |
 | `aimem stale` | Active notes nobody has touched |
 | `aimem refresh` | Rebuild everything |
@@ -191,6 +193,31 @@ note: journal lines named these without linking them, so they did not
 ```
 
 Writing to your journal is CLI-only on purpose. It's not an MCP tool, so an agent can't put text in your journal and have it published on the next refresh.
+
+## Letting agents write
+
+Start the MCP server with `--write` and agents get `vault_remember` and
+`vault_create_note`. They can write freely, because **everything an agent writes is
+marked and held out of the index until you promote it**:
+
+```bash
+aimem review                  # see what is waiting
+aimem review --promote        # accept it all
+aimem review --drop           # discard it all
+aimem review --note Omenswap  # one note at a time
+```
+
+The reasoning: junk on disk costs nothing. Junk in the file every session loads costs on
+every turn. So capture is free and triage is something you do when you feel like it, not a
+gate on writing things down.
+
+An agent-written fact looks like `- 2026-09-30 (unreviewed): ...` and promoting it just
+drops the marker. An agent-created note carries `origin: agent` and is named but not
+described in the index until promoted. Writing the same fact twice is refused, which is
+the most common way an agent generates junk.
+
+Writing to the journal is deliberately *not* an MCP tool, so an agent cannot stage text in
+your private journal for the next refresh to publish.
 
 ## Keeping the index current
 

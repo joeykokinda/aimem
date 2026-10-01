@@ -22,6 +22,7 @@ import (
 	"github.com/joeykokinda/aimem/internal/index"
 	"github.com/joeykokinda/aimem/internal/journal"
 	"github.com/joeykokinda/aimem/internal/mcp"
+	"github.com/joeykokinda/aimem/internal/profile"
 	"github.com/joeykokinda/aimem/internal/search"
 	"github.com/joeykokinda/aimem/internal/sync"
 	"github.com/joeykokinda/aimem/internal/validate"
@@ -40,12 +41,14 @@ Reading
   project               The vault note for the repo you are standing in
   path                  Just that note's path
   activity [project]    Timeline derived from the daily journal
+  profile               What you work on, what you write, how it connects
   stale                 Notes claiming active that nobody has touched
 
 Writing
   remember <fact>       Append a durable fact to this repo's note
   log <what you did>    Add a linked line to today's journal
   log --from-git        Add a line for each commit you authored today
+  review                Triage what agents wrote: promote it or drop it
   refresh               Validate, rebuild the index, sync repo context
 
 Setup
@@ -108,6 +111,10 @@ func main() {
 		err = runDoctor(args)
 	case "portable":
 		err = runPortable(args)
+	case "review":
+		err = runReview(args)
+	case "profile":
+		err = runProfile(args)
 	case "mcp":
 		err = runMCP(args)
 	case "install-hooks":
@@ -304,7 +311,7 @@ func runFind(args []string) error {
 	}
 	hits := search.Run(notes, search.Query{
 		Terms: terms, Type: *kind, Status: *status, Company: *company,
-		Tag: *tag, Limit: *limit, Context: 3,
+		Tag: *tag, Limit: *limit, Context: 3, Synonyms: settings.Synonyms,
 	})
 	if *flags.json {
 		return emitJSON(hits)
@@ -630,6 +637,195 @@ func logFromGit(settings *config.Config, notes []*vault.Note, since, author stri
 	return nil
 }
 
+// runReview triages agent-written content.
+//
+// Agents may write whatever they like; nothing they write reaches the generated index
+// until it passes through here. That ordering is what makes free capture safe: junk sits
+// on disk costing nothing, and this is where it either earns its place or goes away.
+// runProfile prints the derived picture of what this person works on and knows.
+func runProfile(args []string) error {
+	flags := newFlags("profile")
+	settings, err := flags.parse(args)
+	if err != nil {
+		return err
+	}
+	notes, err := notesFor(settings)
+	if err != nil {
+		return err
+	}
+	// Journal mentions count as activity, so a project worked on without its note being
+	// edited still reads as live. Read from the published timeline, never the journal.
+	derived := profile.Build(settings, notes, publishedActivity(settings))
+
+	if *flags.json {
+		return emitJSON(derived)
+	}
+	fmt.Printf("Working on now (%d): %s\n\n", len(derived.ActiveNow), strings.Join(derived.ActiveNow, ", "))
+	section := func(label string, items []profile.Weighted, limit int) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Printf("%s\n", label)
+		for index, item := range items {
+			if index >= limit {
+				break
+			}
+			suffix := ""
+			if item.Active > 0 && item.Active != item.Count {
+				suffix = fmt.Sprintf(", %d active", item.Active)
+			}
+			fmt.Printf("  %-16s %d%s", item.Name, item.Count, suffix)
+			if len(item.Examples) > 0 {
+				fmt.Printf("  (%s)", strings.Join(item.Examples, ", "))
+			}
+			fmt.Println()
+		}
+		fmt.Println()
+	}
+	section(fmt.Sprintf("Languages, from %d checkouts:", derived.ReposWalked), derived.Languages, 8)
+	section("Subjects:", derived.Subjects, 12)
+	section("Companies:", derived.Companies, 6)
+
+	if len(derived.Capability) > 0 {
+		fmt.Printf("Access and hardware (hand-maintained, not derivable): %s\n\n",
+			strings.Join(derived.Capability, ", "))
+	}
+	if len(derived.Clusters) > 0 {
+		fmt.Println("Related work:")
+		for _, cluster := range derived.Clusters {
+			fmt.Printf("  %-14s %s\n", cluster.Reason, strings.Join(cluster.Notes, ", "))
+		}
+	}
+	return nil
+}
+
+// publishedActivity reads last-touched dates out of the generated timeline. The journal
+// itself is private; this uses only what the audited bridge already put in the open.
+func publishedActivity(settings *config.Config) map[string]string {
+	raw, err := os.ReadFile(settings.MetaPath("Activity.md"))
+	if err != nil {
+		return map[string]string{}
+	}
+	latest := map[string]string{}
+	current := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "## [[") {
+			current = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(line), "## [["), "]]")
+			continue
+		}
+		if current == "" || !strings.HasPrefix(strings.TrimSpace(line), "- ") {
+			continue
+		}
+		if date, _, found := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "- "), ":"); found {
+			if len(date) == len("2006-01-02") && date > latest[current] {
+				latest[current] = date
+			}
+		}
+	}
+	return latest
+}
+
+func runReview(args []string) error {
+	flags := newFlags("review")
+	promote := flags.set.Bool("promote", false, "accept everything pending")
+	drop := flags.set.Bool("drop", false, "delete everything pending")
+	only := flags.set.String("note", "", "limit to one note")
+	settings, err := flags.parse(args)
+	if err != nil {
+		return err
+	}
+	if *promote && *drop {
+		return fmt.Errorf("--promote and --drop are mutually exclusive")
+	}
+
+	notes, err := notesFor(settings)
+	if err != nil {
+		return err
+	}
+
+	var pendingNotes []*vault.Note
+	var pendingFacts []vault.Fact
+	for _, note := range notes {
+		if *only != "" && !strings.EqualFold(note.Title, *only) {
+			continue
+		}
+		if note.Unreviewed() {
+			pendingNotes = append(pendingNotes, note)
+		}
+		pendingFacts = append(pendingFacts, note.UnreviewedFacts()...)
+	}
+
+	if len(pendingNotes) == 0 && len(pendingFacts) == 0 {
+		fmt.Println("Nothing waiting for review.")
+		return nil
+	}
+
+	if !*promote && !*drop {
+		if len(pendingNotes) > 0 {
+			fmt.Printf("Notes an agent created (%d), held out of the index:\n\n", len(pendingNotes))
+			for _, note := range pendingNotes {
+				fmt.Printf("  %s  (%s)\n", note.Title, note.Path)
+				if note.Summary != "" {
+					fmt.Printf("    %s\n", note.Summary)
+				}
+			}
+			fmt.Println()
+		}
+		if len(pendingFacts) > 0 {
+			fmt.Printf("Facts an agent appended (%d):\n\n", len(pendingFacts))
+			for _, fact := range pendingFacts {
+				fmt.Printf("  %s:%d  %s\n", fact.Note.Title, fact.Line, fact.Text)
+			}
+			fmt.Println()
+		}
+		fmt.Println("Accept with --promote, discard with --drop, or edit the notes by hand.")
+		fmt.Println("Add --note <Title> to handle one at a time.")
+		return nil
+	}
+
+	var changed int
+	for _, note := range notes {
+		if *only != "" && !strings.EqualFold(note.Title, *only) {
+			continue
+		}
+		if *promote {
+			count, err := vault.PromoteFacts(note)
+			if err != nil {
+				return err
+			}
+			changed += count
+			if note.Unreviewed() {
+				if err := vault.MarkReviewed(note); err != nil {
+					return err
+				}
+				changed++
+			}
+			continue
+		}
+		count, err := vault.DropFacts(note)
+		if err != nil {
+			return err
+		}
+		changed += count
+		// A note the agent created whole is deleted rather than emptied: leaving an
+		// orphan stub behind would fail the validator and clutter the graph.
+		if note.Unreviewed() {
+			if err := os.Remove(note.Abs); err != nil {
+				return err
+			}
+			fmt.Printf("deleted %s\n", note.Path)
+			changed++
+		}
+	}
+
+	action := "promoted"
+	if *drop {
+		action = "dropped"
+	}
+	fmt.Printf("%s %d items. Run `aimem refresh`.\n", action, changed)
+	return nil
+}
+
 func runRefresh(args []string) error {
 	flags := newFlags("refresh")
 	noJournal := flags.set.Bool("no-journal", false, "skip the daily-journal timeline")
@@ -678,6 +874,10 @@ func runRefresh(args []string) error {
 		}
 	}
 	fmt.Printf("wrote %s (%d notes, %d bytes)\n", result.BrainPath, result.Notes, result.Bytes)
+	if result.PendingNotes > 0 || result.PendingFacts > 0 {
+		fmt.Printf("  %d agent-written notes and %d facts are held out of the index; `aimem review` to triage\n",
+			result.PendingNotes, result.PendingFacts)
+	}
 	if result.JSONPath != "" {
 		fmt.Printf("wrote %s\n", result.JSONPath)
 	}

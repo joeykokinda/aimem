@@ -1,13 +1,8 @@
 // Package search ranks notes against a query.
 //
-// This replaces a raw ripgrep call. Substring grep over a vault has two problems: it
-// returns matches with no sense of which note is actually about the subject, and it has
-// no idea what frontmatter means, so it cannot answer "active projects tagged go". Both
-// the CLI and the MCP server use this, so an agent and a human get the same answers.
-//
-// Ranking is deliberately simple and explainable: a title match beats a tag match beats a
-// summary match beats a body match. A vault is hundreds of notes, not millions, so there
-// is nothing here an index would speed up and nothing a model would rank better.
+// Both the CLI and the MCP server use this, so a person and an agent get the same
+// answers. Scoring is BM25 over stemmed tokens with per-field weights, plus a small
+// boost passed along wikilinks; see score.go for why there are no embeddings.
 package search
 
 import (
@@ -18,15 +13,16 @@ import (
 )
 
 // Query is a search request. Empty filters match everything, so a bare Terms search
-// behaves like a ranked grep and a bare filter search behaves like a listing.
+// behaves like a ranked search and a bare filter search behaves like a listing.
 type Query struct {
-	Terms   []string
-	Type    string
-	Status  string
-	Company string
-	Tag     string
-	Limit   int
-	Context int // body lines to return per hit
+	Terms    []string
+	Type     string
+	Status   string
+	Company  string
+	Tag      string
+	Limit    int
+	Context  int        // body lines to return per hit
+	Synonyms [][]string // groups whose members satisfy each other
 }
 
 // Line is one matching body line, with its 1-indexed position.
@@ -48,39 +44,90 @@ type Hit struct {
 	Lines   []Line      `json:"lines,omitempty"`
 }
 
-// Scoring weights. Kept as named constants because the ordering between them is the
-// entire ranking model, and it should be readable without running anything.
-const (
-	scoreTitleExact  = 100
-	scoreTitleWord   = 60
-	scoreTitlePart   = 40
-	scoreTag         = 30
-	scoreCompany     = 25
-	scoreSummary     = 15
-	scoreBodyMatch   = 3
-	scoreBodyMaximum = 30
-)
-
 // Run scores every note against the query and returns the best hits.
+//
+// Filters are applied before scoring, but the corpus statistics come from the whole
+// vault: a term's rarity is a property of the vault, not of the filtered subset, so
+// filtering must not change how a term is weighted.
 func Run(notes []*vault.Note, query Query) []Hit {
-	terms := normalize(query.Terms)
-	var hits []Hit
+	corpus := buildCorpus(notes)
 
-	for _, note := range notes {
-		if !matchesFilters(note, query) {
+	// Each query term becomes the set of tokens that satisfy it.
+	var wanted [][]string
+	for _, term := range query.Terms {
+		term = strings.TrimSpace(strings.ToLower(term))
+		if term == "" {
 			continue
 		}
-		// A filter-only query is a listing: everything passing the filters is a hit.
-		if len(terms) == 0 {
-			hits = append(hits, Hit{
-				Note: note, Title: note.Title, Path: note.Path, Type: note.Type,
-				Status: note.Status, Summary: note.Summary, Score: 1, Reason: "filter match",
-			})
+		wanted = append(wanted, expand(term, query.Synonyms))
+	}
+
+	scores := map[string]float64{}
+	reasons := map[string][]string{}
+	eligible := map[string]*document{}
+
+	for _, document := range corpus.documents {
+		if !matchesFilters(document.note, query) {
 			continue
 		}
-		if hit, ok := score(note, terms, query.Context); ok {
-			hits = append(hits, hit)
+		eligible[document.note.Path] = document
+
+		if len(wanted) == 0 {
+			scores[document.note.Path] = 1
+			reasons[document.note.Path] = []string{"filter match"}
+			continue
 		}
+
+		total := 0.0
+		var matched []string
+		satisfied := true
+		for _, alternatives := range wanted {
+			best := 0.0
+			var bestField string
+			for _, token := range alternatives {
+				for field := range fieldWeights {
+					if points := corpus.score(document, field, token); points > best {
+						best = points
+						bestField = field
+					}
+				}
+			}
+			// Conjunctive: every term must appear somewhere, or the note is not a hit.
+			// Without this a two-word query returns everything mentioning either word.
+			if best == 0 {
+				satisfied = false
+				break
+			}
+			total += best
+			matched = append(matched, bestField)
+		}
+		if !satisfied {
+			continue
+		}
+		scores[document.note.Path] = total
+		reasons[document.note.Path] = matched
+	}
+
+	if len(wanted) > 0 {
+		applyLinkBoost(notes, eligible, scores, reasons)
+	}
+
+	var hits []Hit
+	for path, score := range scores {
+		document := eligible[path]
+		if document == nil {
+			continue
+		}
+		note := document.note
+		hits = append(hits, Hit{
+			Note: note, Title: note.Title, Path: note.Path, Type: note.Type,
+			Status: note.Status, Summary: note.Summary,
+			// Scaled to an integer so output is stable and readable; relative order is
+			// what carries meaning, not the absolute number.
+			Score:  int(score*10 + 0.5),
+			Reason: strings.Join(distinct(reasons[path]), "+"),
+			Lines:  matchingLines(note, wanted, query.Context),
+		})
 	}
 
 	sort.SliceStable(hits, func(a, b int) bool {
@@ -95,84 +142,74 @@ func Run(notes []*vault.Note, query Query) []Hit {
 	return hits
 }
 
-// score requires every term to appear somewhere in the note, then ranks by where. The
-// AND requirement is what stops a two-word query returning everything that mentions
-// either word, which is the failure mode that made grep results unusable.
-func score(note *vault.Note, terms []string, contextLines int) (Hit, bool) {
-	title := strings.ToLower(note.Title)
-	summary := strings.ToLower(note.Summary)
-	company := strings.ToLower(note.Company)
-	tags := strings.ToLower(strings.Join(note.Tags, " "))
+// applyLinkBoost lets a scoring note lift the notes it links to and the notes that link
+// to it. A decision recorded in one note is often explained in its neighbour, so the
+// neighbour is worth surfacing even when it does not contain the query terms as strongly.
+//
+// Only already-matching notes are lifted: the boost reorders results, it never adds a
+// note that failed the conjunctive test. Otherwise one strong hit would drag in its whole
+// neighbourhood regardless of relevance.
+func applyLinkBoost(notes []*vault.Note, eligible map[string]*document,
+	scores map[string]float64, reasons map[string][]string) {
 
-	total := 0
-	var reasons []string
-	var lines []Line
-	seenLine := map[int]bool{}
+	pathByTitle := map[string]string{}
+	for _, note := range notes {
+		pathByTitle[note.Title] = note.Path
+	}
 
-	for _, term := range terms {
-		found := false
+	// Snapshot the direct scores so a boost cannot cascade through the graph.
+	direct := make(map[string]float64, len(scores))
+	for path, score := range scores {
+		direct[path] = score
+	}
 
-		switch {
-		case title == term:
-			total += scoreTitleExact
-			reasons = append(reasons, "title")
-			found = true
-		case containsWord(title, term):
-			total += scoreTitleWord
-			reasons = append(reasons, "title")
-			found = true
-		case strings.Contains(title, term):
-			total += scoreTitlePart
-			reasons = append(reasons, "title")
-			found = true
+	for _, note := range notes {
+		source, scored := direct[note.Path]
+		if !scored {
+			continue
 		}
-
-		if strings.Contains(tags, term) {
-			total += scoreTag
-			reasons = append(reasons, "tag")
-			found = true
-		}
-		if company != "" && strings.Contains(company, term) {
-			total += scoreCompany
-			reasons = append(reasons, "company")
-			found = true
-		}
-		if strings.Contains(summary, term) {
-			total += scoreSummary
-			reasons = append(reasons, "summary")
-			found = true
-		}
-
-		bodyPoints := 0
-		for index, line := range note.Lines {
-			if !strings.Contains(strings.ToLower(line), term) {
+		for _, link := range note.Links {
+			target, known := pathByTitle[link]
+			if !known || target == note.Path {
 				continue
 			}
-			found = true
-			if bodyPoints < scoreBodyMaximum {
-				bodyPoints += scoreBodyMatch
+			if _, isHit := scores[target]; !isHit {
+				continue
 			}
-			if len(lines) < contextLines && !seenLine[index] {
-				seenLine[index] = true
-				lines = append(lines, Line{Number: index + 1, Text: strings.TrimSpace(line)})
+			if _, ok := eligible[target]; !ok {
+				continue
 			}
+			scores[target] += source * linkBoost
+			reasons[target] = append(reasons[target], "linked")
 		}
-		if bodyPoints > 0 {
-			total += bodyPoints
-			reasons = append(reasons, "body")
-		}
+	}
+}
 
-		if !found {
-			return Hit{}, false
+// matchingLines returns the body lines that contain any wanted token, for context.
+func matchingLines(note *vault.Note, wanted [][]string, limit int) []Line {
+	if limit <= 0 || len(wanted) == 0 {
+		return nil
+	}
+	tokens := map[string]bool{}
+	for _, alternatives := range wanted {
+		for _, token := range alternatives {
+			tokens[token] = true
 		}
 	}
 
-	sort.Slice(lines, func(a, b int) bool { return lines[a].Number < lines[b].Number })
-	return Hit{
-		Note: note, Title: note.Title, Path: note.Path, Type: note.Type,
-		Status: note.Status, Summary: note.Summary, Score: total,
-		Reason: strings.Join(distinct(reasons), "+"), Lines: lines,
-	}, true
+	var lines []Line
+	for index, line := range note.Lines {
+		for _, candidate := range tokenize(line) {
+			if tokens[candidate] {
+				lines = append(lines, Line{Number: index + 1, Text: strings.TrimSpace(line)})
+				break
+			}
+		}
+		if len(lines) >= limit {
+			break
+		}
+	}
+	return lines
 }
 
 func matchesFilters(note *vault.Note, query Query) bool {
@@ -200,34 +237,11 @@ func matchesFilters(note *vault.Note, query Query) bool {
 	return true
 }
 
-// containsWord reports a whole-word match, so "go" hits "go, web3" but not "google".
-func containsWord(haystack, needle string) bool {
-	for _, field := range strings.FieldsFunc(haystack, func(r rune) bool {
-		return !('a' <= r && r <= 'z' || '0' <= r && r <= '9')
-	}) {
-		if field == needle {
-			return true
-		}
-	}
-	return false
-}
-
-func normalize(terms []string) []string {
-	var out []string
-	for _, term := range terms {
-		term = strings.ToLower(strings.TrimSpace(term))
-		if term != "" {
-			out = append(out, term)
-		}
-	}
-	return out
-}
-
 func distinct(values []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, value := range values {
-		if !seen[value] {
+		if value != "" && !seen[value] {
 			seen[value] = true
 			out = append(out, value)
 		}

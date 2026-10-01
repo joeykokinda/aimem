@@ -26,9 +26,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/joeykokinda/aimem/internal/config"
+	"github.com/joeykokinda/aimem/internal/profile"
 	"github.com/joeykokinda/aimem/internal/search"
 	"github.com/joeykokinda/aimem/internal/vault"
 )
@@ -145,8 +147,9 @@ func (s *Server) initialize(params json.RawMessage) map[string]any {
 		"serverInfo":      map[string]any{"name": "aimem", "version": Version},
 		"instructions": fmt.Sprintf(
 			"Memory for the %q vault, served %s.\n\n"+
-				"Call vault_context first: one read covers every company, project, research thread, "+
-				"and repo path. Use vault_search before grepping, and vault_note to read one note in full.\n\n"+
+				"Call vault_profile for context about the person, and vault_context for the index of "+
+				"every company, project, research thread and repo path. Use vault_search before "+
+				"grepping, and vault_note to read one note in full.\n\n"+
 				"Private folders (%s) are not reachable through this server by design. Do not ask for "+
 				"them and do not try to read them another way.",
 			s.settings.Name, mode, strings.Join(s.settings.Private, ", ")),
@@ -198,6 +201,15 @@ func (s *Server) tools() []map[string]any {
 			}, "name"),
 		},
 		{
+			"name": "vault_profile",
+			"description": "Who this person is, derived: the languages they actually write (counted " +
+				"from the checkouts their notes claim), the subjects they work on, what they are " +
+				"working on right now, which notes are related, and which notes record the accounts " +
+				"and hardware they have on hand. Read this when you need context about the person " +
+				"rather than about one project.",
+			"inputSchema": object(map[string]any{}),
+		},
+		{
 			"name": "vault_repo",
 			"description": "Given an absolute path to a checkout on disk, return the vault note " +
 				"describing it. Use this when you start work in an unfamiliar repository.",
@@ -208,17 +220,36 @@ func (s *Server) tools() []map[string]any {
 	}
 
 	if s.writable {
-		tools = append(tools, map[string]any{
-			"name": "vault_remember",
-			"description": "Append a durable fact to a note's agent-memory section. Use only for " +
-				"things worth knowing weeks from now: decisions and their reasoning, non-obvious " +
-				"architecture, recurring gotchas, external constraints. Never for secrets, one-off " +
-				"debugging steps, or anything the code or git history already says.",
-			"inputSchema": object(map[string]any{
-				"note": text("Note title to append to."),
-				"fact": text("One sentence. Durable, specific, and not derivable from the repo."),
-			}, "note", "fact"),
-		})
+		tools = append(tools,
+			map[string]any{
+				"name": "vault_remember",
+				"description": "Append a durable fact to a note. Write freely: everything you write is " +
+					"marked unreviewed and held out of the index until the user promotes it, so a " +
+					"wrong guess costs nothing. Worth writing: decisions and why, non-obvious " +
+					"architecture, recurring gotchas, external constraints, status changes. Not " +
+					"worth writing: anything git or the code already says, one-off debugging, or " +
+					"secrets of any kind.",
+				"inputSchema": object(map[string]any{
+					"note": text("Note title to append to. Use vault_search first if unsure."),
+					"fact": text("One sentence. Specific, and not derivable from the repo."),
+				}, "note", "fact"),
+			},
+			map[string]any{
+				"name": "vault_create_note",
+				"description": "Create a note for something that does not have one yet: a new project, " +
+					"company, research thread or idea. The note is marked unreviewed and stays out of " +
+					"the index until the user promotes it. Prefer vault_remember on an existing note " +
+					"when the thing already has one.",
+				"inputSchema": object(map[string]any{
+					"title":   text("Short name, used as the filename and the wikilink target."),
+					"type":    text("One of the vault's configured types, e.g. project, idea, research."),
+					"status":  text("One of the vault's configured statuses, e.g. active, paused."),
+					"body":    text("Markdown body. Start with a '## Goal' section saying what this is."),
+					"company": text("Owning company, if any."),
+					"repo":    text("Path to the checkout, relative to the vault's code_root."),
+					"tags":    text("Comma-separated tags."),
+				}, "title", "type", "status", "body"),
+			})
 	}
 	return tools
 }
@@ -256,6 +287,8 @@ func (s *Server) run(name string, arguments map[string]any) (string, error) {
 		return s.search(arguments)
 	case "vault_note":
 		return s.note(stringArg(arguments, "name"))
+	case "vault_profile":
+		return s.profile()
 	case "vault_repo":
 		return s.repo(stringArg(arguments, "path"))
 	case "vault_remember":
@@ -263,6 +296,11 @@ func (s *Server) run(name string, arguments map[string]any) (string, error) {
 			return "", fmt.Errorf("this server is read-only; restart it with --write to enable vault_remember")
 		}
 		return s.remember(stringArg(arguments, "note"), stringArg(arguments, "fact"))
+	case "vault_create_note":
+		if !s.writable {
+			return "", fmt.Errorf("this server is read-only; restart it with --write to enable vault_create_note")
+		}
+		return s.createNote(arguments)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
@@ -329,13 +367,14 @@ func (s *Server) search(arguments map[string]any) (string, error) {
 		limit = int(value)
 	}
 	hits := search.Run(notes, search.Query{
-		Terms:   strings.Fields(stringArg(arguments, "query")),
-		Type:    stringArg(arguments, "type"),
-		Status:  stringArg(arguments, "status"),
-		Company: stringArg(arguments, "company"),
-		Tag:     stringArg(arguments, "tag"),
-		Limit:   limit,
-		Context: 3,
+		Terms:    strings.Fields(stringArg(arguments, "query")),
+		Type:     stringArg(arguments, "type"),
+		Status:   stringArg(arguments, "status"),
+		Company:  stringArg(arguments, "company"),
+		Tag:      stringArg(arguments, "tag"),
+		Limit:    limit,
+		Context:  3,
+		Synonyms: s.settings.Synonyms,
 	})
 	if len(hits) == 0 {
 		return "No matches in the shared vault.", nil
@@ -360,6 +399,45 @@ func (s *Server) note(name string) (string, error) {
 		return "", fmt.Errorf("no note named %q in the shared vault; call vault_search to find it", name)
 	}
 	return fmt.Sprintf("# %s\n`%s`\n\n%s", note.Title, note.Path, note.Body), nil
+}
+
+func (s *Server) profile() (string, error) {
+	notes, err := s.notes()
+	if err != nil {
+		return "", err
+	}
+	vault.ApplyGitDates(s.settings.Root, notes)
+	derived := profile.Build(s.settings, notes, s.lastTouched())
+	encoded, err := json.MarshalIndent(derived, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// lastTouched reads activity dates from the published timeline, never the journal itself.
+func (s *Server) lastTouched() map[string]string {
+	raw, err := os.ReadFile(s.settings.MetaPath("Activity.md"))
+	if err != nil {
+		return map[string]string{}
+	}
+	latest := map[string]string{}
+	current := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "## [[") {
+			current = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(line), "## [["), "]]")
+			continue
+		}
+		if current == "" || !strings.HasPrefix(strings.TrimSpace(line), "- ") {
+			continue
+		}
+		if date, _, found := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "- "), ":"); found {
+			if len(date) == len("2006-01-02") && date > latest[current] {
+				latest[current] = date
+			}
+		}
+	}
+	return latest
 }
 
 func (s *Server) repo(path string) (string, error) {
@@ -402,10 +480,115 @@ func (s *Server) remember(name, fact string) (string, error) {
 	if note == nil {
 		return "", fmt.Errorf("no note named %q", name)
 	}
-	if err := vault.Remember(note, fact); err != nil {
+	// byAgent: the line is marked, which keeps it out of the generated index until a
+	// human promotes it with `aimem review`.
+	if err := vault.RememberAs(note, fact, true); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Appended to %s. Run `aimem refresh` to rebuild the index.", note.Path), nil
+	return fmt.Sprintf("Appended to %s, marked unreviewed. It stays out of the index until "+
+		"the user runs `aimem review`.", note.Path), nil
+}
+
+// createNote writes a new note, marked unreviewed.
+//
+// The folder is derived from where the vault already keeps notes of that type, rather
+// than configured or guessed: a vault that files projects under "04-Projects" has already
+// said where projects go, and asking an agent to pick would be asking it to invent
+// structure.
+func (s *Server) createNote(arguments map[string]any) (string, error) {
+	title := stringArg(arguments, "title")
+	kind := stringArg(arguments, "type")
+	status := stringArg(arguments, "status")
+	body := stringArg(arguments, "body")
+	if title == "" || kind == "" || status == "" || body == "" {
+		return "", fmt.Errorf("title, type, status and body are all required")
+	}
+	if !vault.Contains(s.settings.Types, kind) {
+		return "", fmt.Errorf("type %q is not one of: %s", kind, strings.Join(s.settings.Types, " "))
+	}
+	if !vault.Contains(s.settings.Statuses, status) {
+		return "", fmt.Errorf("status %q is not one of: %s", status, strings.Join(s.settings.Statuses, " "))
+	}
+	if strings.ContainsAny(title, `/\:*?"<>|`) {
+		return "", fmt.Errorf("title %q contains characters that are not valid in a filename", title)
+	}
+
+	notes, err := s.notes()
+	if err != nil {
+		return "", err
+	}
+	if existing := search.Resolve(notes, title); existing != nil {
+		return "", fmt.Errorf("a note named %q already exists at %s; use vault_remember to add to it",
+			title, existing.Path)
+	}
+
+	folder := s.folderForType(notes, kind)
+	if folder == "" {
+		return "", fmt.Errorf("cannot tell where a %q note belongs in this vault; ask the user to create the first one", kind)
+	}
+
+	var frontmatter strings.Builder
+	frontmatter.WriteString("---\n")
+	frontmatter.WriteString(fmt.Sprintf("type: %s\nstatus: %s\n", kind, status))
+	if company := stringArg(arguments, "company"); company != "" {
+		frontmatter.WriteString(fmt.Sprintf("company: %s\n", company))
+	}
+	if repo := stringArg(arguments, "repo"); repo != "" {
+		frontmatter.WriteString(fmt.Sprintf("repo: %s\n", repo))
+	}
+	if tags := stringArg(arguments, "tags"); tags != "" {
+		var cleaned []string
+		for _, tag := range strings.Split(tags, ",") {
+			if trimmed := strings.TrimSpace(tag); trimmed != "" {
+				cleaned = append(cleaned, trimmed)
+			}
+		}
+		if len(cleaned) > 0 {
+			frontmatter.WriteString(fmt.Sprintf("tags: [%s]\n", strings.Join(cleaned, ", ")))
+		}
+	}
+	// origin marks this as agent-written; the absence of `reviewed: true` is what keeps
+	// it out of the index.
+	frontmatter.WriteString("origin: agent\n---\n")
+
+	content := frontmatter.String() + fmt.Sprintf("# %s\n\n%s\n", title, strings.TrimSpace(body))
+	if name := vault.MatchSecret(content); name != "" {
+		return "", fmt.Errorf("refusing to write: this looks like a %s", name)
+	}
+
+	path := filepath.Join(s.settings.Root, folder, title+".md")
+	if _, err := os.Stat(path); err == nil {
+		return "", fmt.Errorf("%s already exists on disk", path)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Created %s/%s.md, marked unreviewed.\n\n"+
+		"It is NOT in the index yet and nothing links to it. Tell the user it exists and that "+
+		"`aimem review` promotes or drops it. A promoted note still needs a [[%s]] link from a "+
+		"related note to be reachable in the graph.", folder, title, title), nil
+}
+
+// folderForType returns the folder where this vault already keeps notes of a given type.
+func (s *Server) folderForType(notes []*vault.Note, kind string) string {
+	counts := map[string]int{}
+	for _, note := range notes {
+		if note.Type != kind {
+			continue
+		}
+		top := strings.SplitN(filepath.ToSlash(note.Path), "/", 2)[0]
+		if vault.Contains(s.settings.Shared, top) {
+			counts[top]++
+		}
+	}
+	best, bestCount := "", 0
+	for folder, count := range counts {
+		if count > bestCount {
+			best, bestCount = folder, count
+		}
+	}
+	return best
 }
 
 func stringArg(arguments map[string]any, key string) string {

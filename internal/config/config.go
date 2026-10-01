@@ -56,6 +56,12 @@ type Config struct {
 	StaleableTypes []string `json:"staleable_types"`
 	StaleDays      int      `json:"stale_days"`
 
+	// Synonyms are groups of words that should satisfy each other in search. Configured
+	// rather than built in: a general-purpose list guesses wrong about a technical vault,
+	// and the person keeping the notes is the one who knows that "auth" and "login" mean
+	// the same thing in them.
+	Synonyms [][]string `json:"synonyms,omitempty"`
+
 	JournalEntriesPerProject int `json:"journal_entries_per_project"`
 
 	// IndexRepoMap controls whether the generated index carries the full repo-to-note
@@ -215,6 +221,7 @@ func Load(root string) (*Config, error) {
 		Statuses:                 firstNonEmptyList(schema.list("statuses"), defaults.Statuses),
 		StaleableTypes:           firstNonEmptyList(schema.list("staleable_types"), defaults.StaleableTypes),
 		StaleDays:                schema.number("stale_days", defaults.StaleDays),
+		Synonyms:                 parseSynonyms(schema.list("synonyms")),
 		JournalFilename:          firstNonEmpty(folders.text("journal_filename"), defaults.JournalFilename),
 		JournalEntriesPerProject: schema.number("journal_entries_per_project", defaults.JournalEntriesPerProject),
 		IndexRepoMap:             schema.boolean("index_repo_map", defaults.IndexRepoMap),
@@ -432,6 +439,16 @@ func (c *Config) Write() error {
 	out.WriteString("  # accrete rather than rot, so warning about them trains you to ignore warnings.\n")
 	writeList(&out, "staleable_types", c.StaleableTypes)
 	out.WriteString(fmt.Sprintf("  stale_days: %d\n", c.StaleDays))
+	out.WriteString("  # Words that should find each other in search. One group per line,\n")
+	out.WriteString("  # comma separated. Nothing is assumed: only what you list here.\n")
+	if len(c.Synonyms) == 0 {
+		out.WriteString("  synonyms: []\n")
+	} else {
+		out.WriteString("  synonyms:\n")
+		for _, group := range c.Synonyms {
+			out.WriteString(fmt.Sprintf("    - %s\n", strings.Join(group, ", ")))
+		}
+	}
 	out.WriteString(fmt.Sprintf("  journal_entries_per_project: %d\n", c.JournalEntriesPerProject))
 	out.WriteString("  # The repo table is the biggest block in the generated index and is pure\n")
 	out.WriteString("  # lookup data; `aimem project` answers it precisely. Turn off to shrink the\n")
@@ -448,6 +465,25 @@ func (c *Config) Write() error {
 	writeList(&out, "skip", c.SyncSkip)
 
 	return os.WriteFile(filepath.Join(c.Root, FileName), []byte(out.String()), 0o644)
+}
+
+// parseSynonyms turns each configured line into a group. A line is a comma-separated
+// list, which keeps the config a flat block list rather than needing nested YAML.
+func parseSynonyms(lines []string) [][]string {
+	var groups [][]string
+	for _, line := range lines {
+		var group []string
+		for _, word := range strings.Split(line, ",") {
+			if trimmed := strings.TrimSpace(word); trimmed != "" {
+				group = append(group, trimmed)
+			}
+		}
+		// A group of one satisfies only itself, which is what happens anyway.
+		if len(group) > 1 {
+			groups = append(groups, group)
+		}
+	}
+	return groups
 }
 
 func writeList(out *strings.Builder, key string, values []string) {

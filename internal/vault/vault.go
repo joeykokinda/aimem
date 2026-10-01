@@ -366,28 +366,6 @@ func (n *Note) IsStale(settings *config.Config) bool {
 // separate from hand-written prose so a human can see at a glance what a tool wrote.
 const AgentMemoryHeading = "## Agent memory"
 
-// Remember appends a dated fact to a note's agent-memory section.
-//
-// The fact is scanned for secrets first. This is the one path where text an agent
-// composed enters a vault that gets committed and pushed, so refusing here is cheaper
-// than catching it in the validator after it is already in the history.
-func Remember(note *Note, fact string) error {
-	fact = strings.TrimSpace(fact)
-	if fact == "" {
-		return fmt.Errorf("nothing to remember")
-	}
-	if name := MatchSecret(fact); name != "" {
-		return fmt.Errorf("refusing to write: this looks like a %s, and the vault is pushed to a remote", name)
-	}
-
-	existing, err := os.ReadFile(note.Abs)
-	if err != nil {
-		return err
-	}
-	body := strings.TrimRight(string(existing), "\n")
-	if !strings.Contains(body, AgentMemoryHeading) {
-		body += "\n\n" + AgentMemoryHeading
-	}
-	body += fmt.Sprintf("\n- %s: %s\n", time.Now().Format("2006-01-02"), fact)
-	return os.WriteFile(note.Abs, []byte(body), 0o644)
-}
+// Remember appends a dated fact as the human author, so it needs no review.
+// See RememberAs in provenance.go for the agent path.
+func Remember(note *Note, fact string) error { return RememberAs(note, fact, false) }
