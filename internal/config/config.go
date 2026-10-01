@@ -338,16 +338,47 @@ func (c *Config) ResolveRepo(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	if strings.HasPrefix(raw, "~") || filepath.IsAbs(raw) {
+	if strings.HasPrefix(raw, "~") {
 		return expand(raw)
 	}
+	// A rooted path is returned as written, never joined onto CodeRoot and never passed
+	// through filepath.Abs. filepath.IsAbs("/opt/thing") is false on Windows, so relying
+	// on it would silently resolve a Unix path from a synced vault to
+	// C:\Users\me\Projects\opt\thing: a real directory that is the wrong one. Leaving
+	// it alone makes it report as missing, which is the truth.
+	if isRooted(raw) {
+		return filepath.Clean(raw)
+	}
 	return filepath.Join(expand(c.CodeRoot), filepath.FromSlash(raw))
+}
+
+// isRooted reports whether a path names a root explicitly, on any platform: a leading
+// separator, or a Windows drive letter.
+func isRooted(path string) bool {
+	if path == "" {
+		return false
+	}
+	if path[0] == '/' || path[0] == '\\' {
+		return true
+	}
+	if len(path) >= 3 && path[1] == ':' && (path[2] == '/' || path[2] == '\\') {
+		letter := path[0] | 0x20
+		return letter >= 'a' && letter <= 'z'
+	}
+	return false
 }
 
 // PortableRepo rewrites an absolute path into the shortest portable form this config can
 // resolve back to it. Used to migrate a vault whose notes were written on one machine.
 func (c *Config) PortableRepo(absolute string) string {
-	absolute = expand(absolute)
+	absolute = strings.TrimSpace(absolute)
+	if strings.HasPrefix(absolute, "~") {
+		absolute = expand(absolute)
+	} else if isRooted(absolute) {
+		absolute = filepath.Clean(absolute)
+	} else {
+		absolute = expand(absolute)
+	}
 	if codeRoot := expand(c.CodeRoot); codeRoot != "" {
 		if relative, err := filepath.Rel(codeRoot, absolute); err == nil &&
 			!strings.HasPrefix(relative, "..") && relative != "." {
@@ -526,3 +557,8 @@ func Sorted(values []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// IsRootedPath reports whether a repo path names a root explicitly, on any platform.
+// Exported so the validator and the migration command share one definition of "absolute"
+// rather than each reaching for filepath.IsAbs, whose answer differs by platform.
+func IsRootedPath(path string) bool { return isRooted(strings.TrimSpace(path)) }

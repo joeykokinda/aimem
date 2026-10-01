@@ -189,7 +189,7 @@ func TestMCPToolsAreClean(t *testing.T) {
 		{"vault_note", map[string]any{"name": "Keys"}},
 		{"vault_note", map[string]any{"name": "Inbox/Scratch.md"}},
 		{"vault_note", map[string]any{"name": "../../../etc/passwd"}},
-		{"vault_repo", map[string]any{"path": "/nonexistent/alpha"}},
+		{"vault_repo", map[string]any{"path": testvault.AlphaRepo}},
 	}
 
 	transcript := exchange(t, settings, calls)

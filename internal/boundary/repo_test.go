@@ -1,6 +1,7 @@
 package boundary
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -19,9 +20,13 @@ func TestRepoLookupIgnoresNotesWithoutRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	claimed, err := json.Marshal(testvault.AlphaRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	answer := exchangeRaw(t, settings, false,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":`+
-			`{"name":"vault_repo","arguments":{"path":"/nonexistent/alpha"}}}`)
+			`{"name":"vault_repo","arguments":{"path":`+string(claimed)+`}}}`)
 	if !strings.Contains(answer, "Alpha") {
 		t.Errorf("vault_repo did not resolve the claiming note: %s", answer)
 	}

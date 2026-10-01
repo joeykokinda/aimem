@@ -19,6 +19,11 @@ import (
 // means private content escaped, wherever it escaped from.
 const Canary = "CANARY-PRIVATE-DO-NOT-LEAK-9f3a2b"
 
+// AlphaRepo is the path the fixture's Alpha note claims. Built with filepath so the
+// fixture means the same thing on Windows, where a bare "/nonexistent/alpha" is not a
+// rooted path at all.
+var AlphaRepo = filepath.Clean(string(filepath.Separator) + filepath.Join("nonexistent", "alpha"))
+
 // Build creates a vault with the standard tiers, a note in each, and canaries planted
 // throughout the private and locked folders. It returns the loaded config.
 func Build(t *testing.T) *config.Config {
@@ -32,11 +37,11 @@ func Build(t *testing.T) *config.Config {
 		t.Fatalf("write config: %v", err)
 	}
 
-	Write(t, root, "Projects/Alpha.md", `---
+	Write(t, root, "Projects/Alpha.md", strings.ReplaceAll(`---
 type: project
 status: active
 company: Acme
-repo: /nonexistent/alpha
+repo: {{ALPHA_REPO}}
 tags: [go, indexing]
 ---
 # Alpha
@@ -45,7 +50,7 @@ tags: [go, indexing]
 Alpha is the shared project used across tests.
 
 Links to [[Beta]].
-`)
+`, "{{ALPHA_REPO}}", AlphaRepo))
 	Write(t, root, "Projects/Beta.md", `---
 type: project
 status: paused

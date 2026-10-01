@@ -181,7 +181,7 @@ func checkRepos(settings *config.Config, notes []*vault.Note) []problem {
 		// An absolute path names exactly one machine. That used to be required; it is now
 		// the least portable option, because a vault synced to a second machine with a
 		// different username or layout resolves every one of them to nothing.
-		if filepath.IsAbs(note.RepoRaw) {
+		if config.IsRootedPath(note.RepoRaw) {
 			found = append(found, problem{"warn", "absolute-repo", note.Path, 0,
 				fmt.Sprintf("repo %q is absolute and will not resolve on another machine; run `aimem portable` to rewrite it",
 					note.RepoRaw)})

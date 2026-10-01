@@ -222,6 +222,21 @@ func TestJournalFilenameMustVaryWithTheDate(t *testing.T) {
 // TestRepoPathsArePortable covers the property that makes one vault usable on several
 // machines: a note says where a checkout lives in terms each machine can resolve for
 // itself, instead of hardcoding one person's home directory.
+func TestIsRootedPath(t *testing.T) {
+	rooted := []string{"/opt/thing", "/", `\\server\share`, `C:\code\thing`, "c:/code/thing"}
+	relative := []string{"company/thing", "thing", "", "./thing", "~/thing"}
+	for _, path := range rooted {
+		if !IsRootedPath(path) {
+			t.Errorf("IsRootedPath(%q) = false, want true on every platform", path)
+		}
+	}
+	for _, path := range relative {
+		if IsRootedPath(path) {
+			t.Errorf("IsRootedPath(%q) = true, want false", path)
+		}
+	}
+}
+
 func TestRepoPathsArePortable(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -236,7 +251,9 @@ func TestRepoPathsArePortable(t *testing.T) {
 	}{
 		{"company/turtosa", filepath.Join(home, "Projects", "company", "turtosa")},
 		{"~/Code/thing", filepath.Join(home, "Code", "thing")},
-		{"/opt/elsewhere", "/opt/elsewhere"},
+		// A rooted Unix path stays as written even on Windows, where filepath.IsAbs
+		// would call it relative and silently join it onto CodeRoot.
+		{"/opt/elsewhere", filepath.Clean("/opt/elsewhere")},
 		{"", ""},
 	}
 	for _, test := range tests {
@@ -251,7 +268,7 @@ func TestRepoPathsArePortable(t *testing.T) {
 	for _, absolute := range []string{
 		filepath.Join(home, "Projects", "company", "turtosa"),
 		filepath.Join(home, "Code", "thing"),
-		"/opt/elsewhere",
+		filepath.Clean("/opt/elsewhere"),
 	} {
 		portable := settings.PortableRepo(absolute)
 		if got := settings.ResolveRepo(portable); got != absolute {

@@ -1148,7 +1148,7 @@ func runPortable(args []string) error {
 	}
 	var changes []change
 	for _, note := range notes {
-		if note.RepoRaw == "" || !filepath.IsAbs(note.RepoRaw) {
+		if note.RepoRaw == "" || !config.IsRootedPath(note.RepoRaw) {
 			continue
 		}
 		portable := settings.PortableRepo(note.RepoRaw)
