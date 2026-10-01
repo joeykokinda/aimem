@@ -125,7 +125,7 @@ relative to `code_root` instead:
 ```yaml
 code_root: ~/Projects      # in .aimem.yml
 
-repo: company/turtosa      # in a note -> ~/Projects/company/turtosa on any machine
+repo: company/meridian      # in a note -> ~/Projects/company/meridian on any machine
 repo: ~/Code/thing         # home-relative also works
 repo: /opt/thing           # absolute still works, but only on one machine
 ```
@@ -178,9 +178,9 @@ A journal line is copied into the shared timeline **only if it links to a note a
 Typing `[[Brackets]]` every time is annoying, so:
 
 ```bash
-$ aimem log deposit sweep works on omenswap now
-  - deposit sweep works on [[Omenswap|omenswap]] now
-  reaches the timeline via Omenswap
+$ aimem log deposit sweep works on starling now
+  - deposit sweep works on [[Starling|starling]] now
+  reaches the timeline via Starling
 ```
 
 It finds the project name, adds the link, and tells you when a line *won't* make it into the timeline.
@@ -189,7 +189,7 @@ It finds the project name, adds the link, and tells you when a line *won't* make
 
 ```
 note: journal lines named these without linking them, so they did not
-      reach the timeline: Omenswap (2), Crypto-Bootcamp (1)
+      reach the timeline: Starling (2), Ledger-Course (1)
 ```
 
 Writing to your journal is CLI-only on purpose. It's not an MCP tool, so an agent can't put text in your journal and have it published on the next refresh.
@@ -204,7 +204,7 @@ marked and held out of the index until you promote it**:
 aimem review                  # see what is waiting
 aimem review --promote        # accept it all
 aimem review --drop           # discard it all
-aimem review --note Omenswap  # one note at a time
+aimem review --note Starling  # one note at a time
 ```
 
 The reasoning: junk on disk costs nothing. Junk in the file every session loads costs on

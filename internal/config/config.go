@@ -30,7 +30,7 @@ type Config struct {
 
 	// CodeRoot is where this machine keeps checkouts. A note's `repo:` may be written
 	// relative to it, which is what lets one vault work on several machines: the note
-	// says "company/turtosa" and each machine resolves that against its own layout.
+	// says "company/meridian" and each machine resolves that against its own layout.
 	// An absolute `repo:` still works and still means exactly one machine.
 	CodeRoot string `json:"code_root"`
 
@@ -140,12 +140,10 @@ func SavePointer(root string) error {
 }
 
 // DefaultRoot resolves the vault location, most explicit first: AIMEM_VAULT, then the
-// legacy OBBY_VAULT, then the saved pointer, then a conventional path.
+// path saved by `aimem use`, then a conventional path.
 func DefaultRoot() string {
-	for _, name := range []string{"AIMEM_VAULT", "OBBY_VAULT"} {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return expand(value)
-		}
+	if value := strings.TrimSpace(os.Getenv("AIMEM_VAULT")); value != "" {
+		return expand(value)
 	}
 	if path := PointerPath(); path != "" {
 		if raw, err := os.ReadFile(path); err == nil {
@@ -328,7 +326,7 @@ func (c *Config) Validate() error {
 // ResolveRepo turns a note's `repo:` value into an absolute path on this machine.
 //
 // Three forms are accepted, in decreasing order of portability:
-//   - relative ("company/turtosa"), resolved against CodeRoot
+//   - relative ("company/meridian"), resolved against CodeRoot
 //   - home-relative ("~/Projects/thing")
 //   - absolute ("/home/someone/Projects/thing"), which only ever matches one machine
 //

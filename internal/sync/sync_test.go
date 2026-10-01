@@ -100,15 +100,17 @@ func TestBlockIsIdempotentAndPreservesSurroundings(t *testing.T) {
 	}
 }
 
-// TestLegacyMarkerIsReplaced keeps an upgrade from leaving two blocks behind.
-func TestLegacyMarkerIsReplaced(t *testing.T) {
+// TestStaleBlockIsReplaced keeps a rename from leaving two blocks behind. markerPairs is a
+// list for exactly this case, and matching a begin marker against the wrong end marker is
+// what previously caused a duplicate instead of a replacement.
+func TestStaleBlockIsReplaced(t *testing.T) {
 	repo := t.TempDir()
 	settings := config.Default(t.TempDir())
 	note := &vault.Note{Title: "Alpha", Path: "Projects/Alpha.md", Status: "active", Repo: repo}
 
 	claude := filepath.Join(repo, "CLAUDE.md")
-	legacy := "# Repo\n\n<!-- obby:begin generated -->\nold generated text\n<!-- obby:end -->\n"
-	if err := os.WriteFile(claude, []byte(legacy), 0o644); err != nil {
+	stale := "# Repo\n\n" + beginMarker + "\nold generated text\n" + endMarker + "\n"
+	if err := os.WriteFile(claude, []byte(stale), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := writeBlock(settings, note); err != nil {
@@ -117,13 +119,13 @@ func TestLegacyMarkerIsReplaced(t *testing.T) {
 
 	body, _ := os.ReadFile(claude)
 	if strings.Contains(string(body), "old generated text") {
-		t.Error("the legacy block was not replaced")
+		t.Error("the stale block was not replaced")
 	}
 	if strings.Count(string(body), "vault context") != 1 {
 		t.Error("replacing the legacy block did not produce exactly one new block")
 	}
-	if strings.Contains(string(body), "obby:") {
-		t.Error("a legacy marker survived the replacement")
+	if strings.Count(string(body), beginMarker) != 1 {
+		t.Error("replacement left more than one block")
 	}
 }
 
@@ -149,16 +151,15 @@ func TestDeadAndUnmappedNotesAreIgnored(t *testing.T) {
 	}
 }
 
-// TestBothMarkerVintagesAreRemoved covers the upgrade state where a rename left two
-// generated blocks in one file. Replacing only the first leaves a stale block that
-// contradicts the fresh one.
-func TestBothMarkerVintagesAreRemoved(t *testing.T) {
+// TestEveryBlockIsRemoved covers a file that somehow ended up with two generated blocks.
+// Replacing only the first leaves a stale one behind that contradicts the fresh one.
+func TestEveryBlockIsRemoved(t *testing.T) {
 	repo := t.TempDir()
 	settings := config.Default(t.TempDir())
 	note := &vault.Note{Title: "Alpha", Path: "Projects/Alpha.md", Status: "active", Repo: repo}
 
 	claude := filepath.Join(repo, "CLAUDE.md")
-	both := "<!-- obby:begin gen -->\nstale text\n<!-- obby:end -->\n\n" +
+	both := beginMarker + "\nstale text\n" + endMarker + "\n\n" +
 		beginMarker + "\nnewer text\n" + endMarker + "\n\n# Hand-written\n\nKeep me.\n"
 	if err := os.WriteFile(claude, []byte(both), 0o644); err != nil {
 		t.Fatal(err)
@@ -169,9 +170,6 @@ func TestBothMarkerVintagesAreRemoved(t *testing.T) {
 
 	body, _ := os.ReadFile(claude)
 	text := string(body)
-	if strings.Contains(text, "obby:") {
-		t.Error("the legacy block survived")
-	}
 	if strings.Contains(text, "stale text") || strings.Contains(text, "newer text") {
 		t.Error("old generated content survived")
 	}

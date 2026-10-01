@@ -249,7 +249,7 @@ func TestRepoPathsArePortable(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{"company/turtosa", filepath.Join(home, "Projects", "company", "turtosa")},
+		{"company/meridian", filepath.Join(home, "Projects", "company", "meridian")},
 		{"~/Code/thing", filepath.Join(home, "Code", "thing")},
 		// A rooted Unix path stays as written even on Windows, where filepath.IsAbs
 		// would call it relative and silently join it onto CodeRoot.
@@ -266,7 +266,7 @@ func TestRepoPathsArePortable(t *testing.T) {
 	// resolves back to the same directory. Round-tripping is the safety property —
 	// a rewrite that pointed at a different checkout would be worse than no rewrite.
 	for _, absolute := range []string{
-		filepath.Join(home, "Projects", "company", "turtosa"),
+		filepath.Join(home, "Projects", "company", "meridian"),
 		filepath.Join(home, "Code", "thing"),
 		filepath.Clean("/opt/elsewhere"),
 	} {

@@ -17,7 +17,7 @@
 #     deliberately, work, then lock again. Do not leave it mounted.
 set -euo pipefail
 
-cipher_dir="${AIMEM_LOCKED_STORE:-${OBBY_LOCKED_STORE:-$HOME/.aimem-locked}}"
+cipher_dir="${AIMEM_LOCKED_STORE:-$HOME/.aimem-locked}"
 
 # The mount point comes from the vault config so this cannot drift from the folder aimem
 # refuses to read. Restating "09-Locked" here would be a second source of truth.

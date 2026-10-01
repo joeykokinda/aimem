@@ -30,7 +30,7 @@ vault="$work/vault"
 # end-to-end `aimem init` below would overwrite the developer's real vault pointer.
 export XDG_STATE_HOME="$work/state"
 export XDG_CONFIG_HOME="$work/config"
-unset AIMEM_VAULT OBBY_VAULT AIMEM_INDEX
+unset AIMEM_VAULT AIMEM_INDEX
 
 "$binary" init --vault "$vault" >/dev/null
 [ -f "$vault/.aimem.yml" ] || { echo "init did not write a config"; exit 1; }

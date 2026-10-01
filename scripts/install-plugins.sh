@@ -6,7 +6,7 @@ set -uo pipefail
 if command -v aimem >/dev/null 2>&1; then
   vault="$(aimem config --json | sed -n 's/.*"root": "\([^"]*\)".*/\1/p' | head -1)"
 fi
-vault="${AIMEM_VAULT:-${OBBY_VAULT:-${vault:-}}}"
+vault="${AIMEM_VAULT:-${vault:-}}"
 [ -n "$vault" ] || { echo "no vault configured; run: aimem use /path/to/vault" >&2; exit 1; }
 plugins_dir="$vault/.obsidian/plugins"
 mkdir -p "$plugins_dir"

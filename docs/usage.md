@@ -128,7 +128,7 @@ safe because of where the writes land:
 aimem review                   # what is waiting
 aimem review --promote         # accept everything
 aimem review --drop            # discard everything
-aimem review --note Omenswap   # one note at a time
+aimem review --note Starling   # one note at a time
 ```
 
 An agent-written fact looks like `- 2026-09-30 (unreviewed): ...`. An agent-created note
@@ -238,7 +238,7 @@ Write `repo:` fields relative to `code_root` so they resolve on every machine:
 
 ```yaml
 code_root: ~/Projects     # .aimem.yml
-repo: company/turtosa     # a note
+repo: company/meridian     # a note
 ```
 
 An absolute `repo:` still works but names exactly one machine. `aimem portable` converts

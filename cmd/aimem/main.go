@@ -64,7 +64,7 @@ Setup
 
 Common flags
   --vault PATH          Vault root. Resolution order: --vault, $AIMEM_VAULT,
-                        $OBBY_VAULT, the path saved by "aimem use", then ~/vault
+                        the path saved by "aimem use", then ~/vault
   --json                Machine-readable output, where it makes sense
 
 Private and locked folders are never read. See README.md for the contract.`

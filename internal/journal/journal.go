@@ -92,7 +92,7 @@ func Append(settings *config.Config, notes []*vault.Note, text, forced string, w
 }
 
 // link wraps every shared note title the text mentions in wikilinks, longest title first
-// so "Creou Discover" is matched before "Creou" and the shorter name does not carve up
+// so "Northwind Atlas" is matched before "Northwind" and the shorter name does not carve up
 // the longer one.
 func link(text string, notes []*vault.Note, forced string) ([]string, string) {
 	titles := make([]string, 0, len(notes))
@@ -159,7 +159,7 @@ func link(text string, notes []*vault.Note, forced string) ([]string, string) {
 }
 
 // replaceOutsideLinks applies a replacement only to text that is not already inside a
-// [[wikilink]], so linking "Creou" cannot corrupt an existing [[Creou Discover]].
+// [[wikilink]], so linking "Northwind" cannot corrupt an existing [[Northwind Atlas]].
 func replaceOutsideLinks(text string, pattern *regexp.Regexp, replace func(string) string) string {
 	var out strings.Builder
 	rest := text

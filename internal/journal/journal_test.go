@@ -19,23 +19,23 @@ func notes(titles ...string) []*vault.Note {
 }
 
 func TestLinksProjectNames(t *testing.T) {
-	corpus := notes("Omenswap", "Creou", "Creou Discover", "Go")
+	corpus := notes("Starling", "Northwind", "Northwind Atlas", "Go")
 	tests := []struct {
 		name   string
 		text   string
 		want   string
 		linked []string
 	}{
-		{"exact name", "deposit sweep works on Omenswap now",
-			"deposit sweep works on [[Omenswap]] now", []string{"Omenswap"}},
-		{"different casing keeps what was typed", "fixed omenswap sweep",
-			"fixed [[Omenswap|omenswap]] sweep", []string{"Omenswap"}},
-		{"longest title wins", "shipped Creou Discover today",
-			"shipped [[Creou Discover]] today", []string{"Creou Discover"}},
-		{"two projects", "moved Omenswap billing into Creou",
-			"moved [[Omenswap]] billing into [[Creou]]", []string{"Creou", "Omenswap"}},
-		{"already linked stays put", "[[Omenswap]] sweep works",
-			"[[Omenswap]] sweep works", []string{"Omenswap"}},
+		{"exact name", "deposit sweep works on Starling now",
+			"deposit sweep works on [[Starling]] now", []string{"Starling"}},
+		{"different casing keeps what was typed", "fixed starling sweep",
+			"fixed [[Starling|starling]] sweep", []string{"Starling"}},
+		{"longest title wins", "shipped Northwind Atlas today",
+			"shipped [[Northwind Atlas]] today", []string{"Northwind Atlas"}},
+		{"two projects", "moved Starling billing into Northwind",
+			"moved [[Starling]] billing into [[Northwind]]", []string{"Northwind", "Starling"}},
+		{"already linked stays put", "[[Starling]] sweep works",
+			"[[Starling]] sweep works", []string{"Starling"}},
 		{"no match", "read a paper about consensus", "read a paper about consensus", nil},
 		{"word boundary", "going to the store", "going to the store", nil},
 	}
@@ -53,11 +53,11 @@ func TestLinksProjectNames(t *testing.T) {
 }
 
 // TestExistingLinkIsNotCorrupted is why linking skips text already inside brackets:
-// linking "Creou" into "[[Creou Discover]]" would produce nested, broken syntax.
+// linking "Northwind" into "[[Northwind Atlas]]" would produce nested, broken syntax.
 func TestExistingLinkIsNotCorrupted(t *testing.T) {
-	linked, got := link("shipped [[Creou Discover]] and fixed Omenswap",
-		notes("Creou", "Creou Discover", "Omenswap"), "")
-	if strings.Contains(got, "[[Creou Discover|") || strings.Count(got, "[[") != 2 {
+	linked, got := link("shipped [[Northwind Atlas]] and fixed Starling",
+		notes("Northwind", "Northwind Atlas", "Starling"), "")
+	if strings.Contains(got, "[[Northwind Atlas|") || strings.Count(got, "[[") != 2 {
 		t.Errorf("corrupted an existing link: %q", got)
 	}
 	if len(linked) != 2 {
@@ -66,8 +66,8 @@ func TestExistingLinkIsNotCorrupted(t *testing.T) {
 }
 
 func TestForcedProject(t *testing.T) {
-	linked, got := link("the sweep finally works", notes("Omenswap"), "Omenswap")
-	if !strings.HasPrefix(got, "[[Omenswap]]") {
+	linked, got := link("the sweep finally works", notes("Starling"), "Starling")
+	if !strings.HasPrefix(got, "[[Starling]]") {
 		t.Errorf("forced link missing: %q", got)
 	}
 	if len(linked) != 1 {
@@ -77,10 +77,10 @@ func TestForcedProject(t *testing.T) {
 
 func TestAppendWritesAndReports(t *testing.T) {
 	settings := config.Default(t.TempDir())
-	corpus := notes("Omenswap")
+	corpus := notes("Starling")
 	when := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 
-	entry, err := Append(settings, corpus, "deposit sweep works on Omenswap", "", when)
+	entry, err := Append(settings, corpus, "deposit sweep works on Starling", "", when)
 	if err != nil {
 		t.Fatal(err)
 	}

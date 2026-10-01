@@ -28,7 +28,7 @@ case ":$PATH:" in
 esac
 
 pointer="${XDG_CONFIG_HOME:-$HOME/.config}/aimem/vault"
-vault="${AIMEM_VAULT:-${OBBY_VAULT:-}}"
+vault="${AIMEM_VAULT:-}"
 [ -n "$vault" ] || { [ -f "$pointer" ] && vault="$(cat "$pointer")"; } || true
 
 if [ -n "$vault" ] && [ -f "$vault/.aimem.yml" ]; then

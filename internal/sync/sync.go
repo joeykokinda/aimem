@@ -23,13 +23,12 @@ const (
 	endMarker   = "<!-- aimem:end -->"
 )
 
-// markerPairs are the begin/end pairs a generated block may be delimited by, newest
-// first. Older pairs are recognized so an upgrade replaces the existing block rather
-// than appending a second one beside it. Each pair must be matched as a pair: matching a
-// legacy begin against the current end finds nothing and silently duplicates.
+// markerPairs are the begin/end pairs a generated block may be delimited by, newest first.
+// A list rather than one pair so that renaming the marker in future replaces existing
+// blocks instead of appending beside them. Each pair must be matched as a pair: matching a
+// new begin against an old end finds nothing and silently duplicates the block.
 var markerPairs = [][2]string{
 	{beginMarker, endMarker},
-	{"<!-- obby:begin", "<!-- obby:end -->"},
 }
 
 // Outcome reports what a sync did, per repository.
