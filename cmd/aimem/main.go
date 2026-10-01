@@ -1270,6 +1270,29 @@ func runDoctor(args []string) error {
 		fmt.Println("FAIL  index: no BRAIN.md; run `aimem refresh`")
 	}
 
+	// The review queue is reported because a quarantine nobody is told about is just a
+	// place things go to be forgotten.
+	if notes, err := notesFor(settings); err == nil {
+		pendingNotes, pendingFacts := 0, 0
+		for _, note := range notes {
+			if note.Unreviewed() {
+				pendingNotes++
+			}
+			pendingFacts += len(note.UnreviewedFacts())
+		}
+		if pendingNotes+pendingFacts == 0 {
+			fmt.Println("ok    review: nothing waiting")
+		} else {
+			fmt.Printf("warn  review: %d agent-written notes and %d facts are held out of the index; `aimem review`\n",
+				pendingNotes, pendingFacts)
+		}
+	}
+	if len(settings.Synonyms) == 0 {
+		fmt.Println("warn  search: no synonym groups configured; `deployment` will not find `login flow`")
+	} else {
+		fmt.Printf("ok    search: %d synonym groups\n", len(settings.Synonyms))
+	}
+
 	report, err := validate.Run(settings)
 	if err != nil {
 		return err

@@ -103,6 +103,46 @@ folder README. `BRAIN.md` lists unreachable notes under "Unlinked Notes".
 
 ---
 
+## Knowing who you are
+
+```bash
+aimem profile
+```
+
+Languages counted from the checkouts your notes claim, subjects from tags on notes touched
+recently, and clusters of notes that share a subject. Nothing here is hand-maintained,
+which is the point: a written "languages I know" list is wrong within a year, and an agent
+reading a stale one is worse off than one that read nothing. The same content appears at
+the top of the index, so agents get it without asking.
+
+What cannot be derived is access: which accounts exist, which services are paid for, what
+hardware is on hand. Put those in an ordinary reference note and tag it `access`, `host`,
+`hardware`, or `account`; the profile will point at it without trying to guess the contents.
+
+## Reviewing what agents wrote
+
+With `aimem mcp --write`, agents can append facts and create notes without asking. That is
+safe because of where the writes land:
+
+```bash
+aimem review                   # what is waiting
+aimem review --promote         # accept everything
+aimem review --drop            # discard everything
+aimem review --note Omenswap   # one note at a time
+```
+
+An agent-written fact looks like `- 2026-09-30 (unreviewed): ...`. An agent-created note
+carries `origin: agent`. Neither reaches `BRAIN.md` until promoted; an unreviewed note is
+*named* in the index so you know review is waiting, never described. Promoting a fact drops
+the marker; dropping deletes the line.
+
+The reasoning is that junk on disk costs nothing and junk in the index costs on every turn.
+So capture is free and triage is something you do when you feel like it. Writing the same
+fact twice is refused, which is the most common way an agent manufactures junk.
+
+Journal writing is deliberately not an MCP tool, so an agent cannot stage text in your
+private journal for the next refresh to publish.
+
 ## Searching
 
 ```bash
@@ -112,9 +152,23 @@ aimem find retry --tag go --limit 5
 aimem find consensus --json              # structured, for scripts and agents
 ```
 
-Ranking: exact title match, then whole-word title, then partial title, then tag, then
-company, then summary, then body. Body matches are capped so a note that mentions a term
-forty times does not outrank the note that is *about* it.
+Ranking is BM25 over stemmed words, weighted by field. Practically that means `deployment`
+finds a note about `deploying`, a title match beats a body match, a rare word counts for
+more than a common one, and repeating a word stops helping after a few occurrences.
+
+Words that are interchangeable in *your* vault go in the config, because nothing general
+can guess them:
+
+```yaml
+schema:
+  synonyms:
+    - auth, authentication, login, signin
+    - deploy, deployment, release, rollout
+```
+
+Pick these carefully. A group containing `ship` matched a shipping-label note when the
+query was `deployment`, which is exactly the failure mode a built-in list would have had
+everywhere.
 
 ---
 
