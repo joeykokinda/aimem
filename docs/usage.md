@@ -119,6 +119,20 @@ What cannot be derived is access: which accounts exist, which services are paid 
 hardware is on hand. Put those in an ordinary reference note and tag it `access`, `host`,
 `hardware`, or `account`; the profile will point at it without trying to guess the contents.
 
+## Getting context into a session automatically
+
+```bash
+aimem brief --hook
+```
+
+Roughly 1KB covering what you write, what you work on, what is active, the note for the
+repo the session started in, and anything waiting for review. Wire it to Claude Code's
+`SessionStart` hook and agents arrive already knowing, rather than only knowing if they
+thought to ask.
+
+Keep it small on purpose: it is paid for on every session, so it carries the shape of
+things and pointers to the detail, never the detail itself.
+
 ## Reviewing what agents wrote
 
 With `aimem mcp --write`, agents can append facts and create notes without asking. That is

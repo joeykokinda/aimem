@@ -93,6 +93,7 @@ There's a test suite that puts a marker string in every private file, then check
 | `aimem log <what you did>` | Add a line to today's journal, auto-linked |
 | `aimem remember <fact>` | Save a fact to this repo's note |
 | `aimem profile` | What you work on, what you write, how it connects |
+| `aimem brief` | A compact briefing to inject at session start |
 | `aimem review` | Triage what agents wrote: promote or drop |
 | `aimem activity [project]` | What happened recently, from your journal |
 | `aimem stale` | Active notes nobody has touched |
@@ -193,6 +194,35 @@ note: journal lines named these without linking them, so they did not
 ```
 
 Writing to your journal is CLI-only on purpose. It's not an MCP tool, so an agent can't put text in your journal and have it published on the next refresh.
+
+## Pushing context into a session
+
+Everything above waits to be asked: the index is a file an agent may read, the MCP tools
+are calls it may make, and an agent that does not bother gets none of it.
+
+`aimem brief` is the push version. About 1KB: what you write, what you work on, what is
+active, the note for the repo the session started in, and pointers to the rest.
+
+```bash
+aimem brief            # read it yourself
+aimem brief --hook     # emit Claude Code SessionStart hook JSON
+```
+
+Wire it into Claude Code so the context arrives in every session without anything having
+to look for it, in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "aimem brief --hook" }] }
+    ]
+  }
+}
+```
+
+It fails silently and exits zero if the vault is missing or broken, because a briefing is a
+convenience and must never break the session it is briefing.
 
 ## Letting agents write
 

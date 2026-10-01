@@ -42,6 +42,7 @@ Reading
   path                  Just that note's path
   activity [project]    Timeline derived from the daily journal
   profile               What you work on, what you write, how it connects
+  brief                 A compact briefing for the start of an agent session
   stale                 Notes claiming active that nobody has touched
 
 Writing
@@ -115,6 +116,8 @@ func main() {
 		err = runReview(args)
 	case "profile":
 		err = runProfile(args)
+	case "brief":
+		err = runBrief(args)
 	case "mcp":
 		err = runMCP(args)
 	case "install-hooks":
@@ -642,6 +645,124 @@ func logFromGit(settings *config.Config, notes []*vault.Note, since, author stri
 // Agents may write whatever they like; nothing they write reaches the generated index
 // until it passes through here. That ordering is what makes free capture safe: junk sits
 // on disk costing nothing, and this is where it either earns its place or goes away.
+// runBrief prints a compact briefing for the start of an agent session.
+//
+// Everything else here waits to be asked. The index is a file an agent may read, the MCP
+// tools are calls it may make, and an agent that does not bother gets none of it. This is
+// the push version: small enough to inject into every session, so the context arrives
+// whether or not anything thought to look for it.
+//
+// Size is the whole constraint. This is paid for on every session, so it carries the
+// shape of things and pointers to the detail, never the detail itself.
+func runBrief(args []string) error {
+	flags := newFlags("brief")
+	asHook := flags.set.Bool("hook", false, "emit Claude Code SessionStart hook JSON")
+	settings, err := flags.parse(args)
+	if err != nil {
+		// A briefing is a convenience, and a hook that fails must not break the session
+		// it is briefing. Say nothing and exit clean.
+		if *asHook {
+			return nil
+		}
+		return err
+	}
+
+	notes, err := notesFor(settings)
+	if err != nil {
+		if *asHook {
+			return nil
+		}
+		return err
+	}
+	derived := profile.Build(settings, notes, publishedActivity(settings))
+
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("Memory for %s is available through the aimem CLI and the MCP tools.\n\n", settings.Name))
+
+	if names := briefNames(derived.Languages, 5); names != "" {
+		out.WriteString(fmt.Sprintf("Writes: %s (counted from %d checkouts, not self-reported).\n",
+			names, derived.ReposWalked))
+	}
+	if names := briefNames(derived.Subjects, 7); names != "" {
+		out.WriteString(fmt.Sprintf("Works on: %s.\n", names))
+	}
+	if len(derived.ActiveNow) > 0 {
+		active := derived.ActiveNow
+		overflow := 0
+		if len(active) > 12 {
+			overflow = len(active) - 12
+			active = active[:12]
+		}
+		out.WriteString(fmt.Sprintf("Active now (%d): %s", len(derived.ActiveNow), strings.Join(active, ", ")))
+		if overflow > 0 {
+			out.WriteString(fmt.Sprintf(", +%d more", overflow))
+		}
+		out.WriteString("\n")
+	}
+
+	// The note for the repo the session started in is the single most useful thing here,
+	// so it gets a sentence rather than a pointer.
+	if note, err := repoNote(settings); err == nil {
+		out.WriteString(fmt.Sprintf("\nThis repo is %s (%s). %s\n", note.Title, note.Status, note.Summary))
+	}
+
+	pending := 0
+	for _, note := range notes {
+		pending += len(note.UnreviewedFacts())
+		if note.Unreviewed() {
+			pending++
+		}
+	}
+	if pending > 0 {
+		noun := "items"
+		if pending == 1 {
+			noun = "item"
+		}
+		out.WriteString(fmt.Sprintf("\n%d %s you wrote previously %s waiting for review (`aimem review`).\n",
+			pending, noun, map[bool]string{true: "is", false: "are"}[pending == 1]))
+	}
+
+	out.WriteString("\nFor detail: `aimem context` for the full index, `aimem context <project>` for one note, ")
+	out.WriteString("`aimem find <words>` to search, `aimem profile` for the long version. ")
+	out.WriteString("Write durable facts back with the vault_remember tool; they are quarantined until reviewed, so write freely.\n")
+	if len(settings.Private) > 0 {
+		out.WriteString(fmt.Sprintf("Vault folders %s are private and unreadable by design.\n",
+			strings.Join(settings.Private, ", ")))
+	}
+
+	if !*asHook {
+		fmt.Print(out.String())
+		fmt.Fprintf(os.Stderr, "\n(%d bytes)\n", out.Len())
+		return nil
+	}
+
+	// SessionStart hooks inject whatever they put in additionalContext.
+	encoded, err := json.Marshal(map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":     "SessionStart",
+			"additionalContext": out.String(),
+		},
+	})
+	if err != nil {
+		return nil
+	}
+	fmt.Println(string(encoded))
+	return nil
+}
+
+// briefNames renders the leading entries compactly, dropping the counts: at this size the
+// ordering carries the information and the numbers do not.
+func briefNames(items []profile.Weighted, limit int) string {
+	var names []string
+	for index, item := range items {
+		if index >= limit {
+			break
+		}
+		names = append(names, item.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
 // runProfile prints the derived picture of what this person works on and knows.
 func runProfile(args []string) error {
 	flags := newFlags("profile")
