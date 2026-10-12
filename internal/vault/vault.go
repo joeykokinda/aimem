@@ -210,12 +210,20 @@ func FirstProse(body string) string {
 	return ""
 }
 
-func clip(text string) string {
+func clip(text string) string { return Clip(text, 200) }
+
+// Clip shortens text to limit bytes without leaving a [[wikilink]] half open,
+// which the link checker would report as broken.
+func Clip(text string, limit int) string {
 	text = strings.TrimSpace(text)
-	if len(text) > 200 {
-		text = text[:200] + "..."
+	if len(text) <= limit {
+		return text
 	}
-	return text
+	cut := text[:limit]
+	if open := strings.LastIndex(cut, "[["); open > strings.LastIndex(cut, "]]") {
+		cut = cut[:open]
+	}
+	return strings.TrimSpace(cut) + "..."
 }
 
 // WikiLinks returns the distinct [[targets]] in a body, with any |alias stripped.

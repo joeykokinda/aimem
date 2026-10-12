@@ -118,3 +118,13 @@ func TestRememberRefusesSecrets(t *testing.T) {
 		t.Error("a secret was written to the note")
 	}
 }
+
+func TestClipDoesNotSplitWikilink(t *testing.T) {
+	got := Clip("Related thesis: [[Onchain-Agent-Trust]] and more", 25)
+	if got != "Related thesis:..." {
+		t.Fatalf("got %q", got)
+	}
+	if got := Clip("short", 25); got != "short" {
+		t.Fatalf("got %q", got)
+	}
+}

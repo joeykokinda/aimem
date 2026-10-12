@@ -451,7 +451,7 @@ func writeProjects(out *strings.Builder, settings *config.Config, notes []*vault
 		for _, project := range group {
 			out.WriteString(fmt.Sprintf("- **%s**", project.Title))
 			if project.Summary != "" {
-				out.WriteString(": " + clipTo(project.Summary, 110))
+				out.WriteString(": " + vault.Clip(project.Summary, 110))
 			}
 			out.WriteString(fmt.Sprintf(" - `%s`\n", project.Path))
 		}
@@ -484,7 +484,7 @@ func writeResearch(out *strings.Builder, notes []*vault.Note) {
 		}
 		out.WriteString(fmt.Sprintf("- **%s**", note.Title))
 		if note.Summary != "" {
-			out.WriteString(": " + clipTo(note.Summary, 110))
+			out.WriteString(": " + vault.Clip(note.Summary, 110))
 		}
 		out.WriteString(fmt.Sprintf(" - `%s`\n", note.Path))
 	}
@@ -519,7 +519,7 @@ func writeIdeas(out *strings.Builder, notes []*vault.Note) {
 		}
 		out.WriteString(fmt.Sprintf("- **%s** (%s)", idea.Title, horizon))
 		if idea.Summary != "" {
-			out.WriteString(": " + clipTo(idea.Summary, 120))
+			out.WriteString(": " + vault.Clip(idea.Summary, 120))
 		}
 		out.WriteString(fmt.Sprintf(" - `%s`\n", idea.Path))
 	}
@@ -629,13 +629,6 @@ func missingMarker(note *vault.Note) string {
 		return ""
 	}
 	return " (not on disk)"
-}
-
-func clipTo(text string, limit int) string {
-	if len(text) > limit {
-		return strings.TrimSpace(text[:limit]) + "..."
-	}
-	return text
 }
 
 func today() string { return time.Now().Format("2006-01-02 15:04") }
