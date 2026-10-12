@@ -235,8 +235,13 @@ func checkLinks(settings *config.Config, notes []*vault.Note) []problem {
 	}
 
 	var found []problem
+	generated := map[string]bool{
+		filepath.Join(settings.Meta, "BRAIN.md"):    true,
+		filepath.Join(settings.Meta, "Activity.md"): true,
+	}
 	for _, note := range notes {
-		if isTemplate(settings, note.Path) {
+		// A stale generated index must not block the refresh that rewrites it.
+		if isTemplate(settings, note.Path) || generated[note.Path] {
 			continue
 		}
 		for _, link := range note.Links {
